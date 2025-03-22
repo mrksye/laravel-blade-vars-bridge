@@ -19,8 +19,13 @@
     "languages": [
       {
         "id": "blade",
-        "aliases": ["Laravel Blade", "blade"],
-        "extensions": [".blade.php"]
+        "aliases": [
+          "Laravel Blade",
+          "blade"
+        ],
+        "extensions": [
+          ".blade.php"
+        ]
       }
     ],
     "configuration": {
@@ -33,7 +38,9 @@
         },
         "laravel-blade-variable-helper.controllerPaths": {
           "type": "array",
-          "default": ["app/Http/Controllers/**/*.php"],
+          "default": [
+            "app/Http/Controllers/**/*.php"
+          ],
           "description": "Paths to search for Laravel controllers"
         }
       }
@@ -59,6 +66,7 @@
     "typescript": "^5.7.3"
   },
   "dependencies": {
+    "php-parser": "^3.2.2",
     "vscode-languageclient": "^9.0.1",
     "vscode-languageserver": "^9.0.1",
     "vscode-languageserver-textdocument": "^1.0.12"
