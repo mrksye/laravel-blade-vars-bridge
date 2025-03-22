@@ -32,6 +32,8 @@ const connection = createConnection(ProposedFeatures.all); // 接続を作成
 
 const documents = new TextDocuments(TextDocument);
 
+const workspaceRoot = process.cwd(); // プロジェクトのルートパス
+
 
 /** 
  * 初期化処理
@@ -81,7 +83,7 @@ const handleHover = (params: TextDocumentPositionParams): Hover | null => {
     value: [
       `**VarName:** \`${varName}\``,
       `**Type:** \`${hardCodedTypeName}\``,
-      `**Source:** ${createJumpFileLinkText(`${process.cwd()}/${hardcodedFilePath}`)}` 
+      `**Source:** ${createJumpFileLinkText(`${workspaceRoot}}/${hardcodedFilePath}`)}` 
     ].join('\n\n')
   };
 
