@@ -27,8 +27,9 @@ import { createJumpFileLinkText } from './lib/create-text-fns';
 })();
 
 
-// 接続を作成
-const connection = createConnection(ProposedFeatures.all);
+
+const connection = createConnection(ProposedFeatures.all); // 接続を作成
+
 const documents = new TextDocuments(TextDocument);
 
 
