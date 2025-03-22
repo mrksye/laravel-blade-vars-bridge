@@ -7,17 +7,37 @@
     "vscode": "^1.98.0"
   },
   "categories": [
+    "Programming Languages",
     "Other"
   ],
-  "activationEvents": [],
+  "activationEvents": [
+    "onLanguage:blade",
+    "onLanguage:php"
+  ],
   "main": "./dist/extension.js",
   "contributes": {
-    "commands": [
+    "languages": [
       {
-        "command": "laravel-blade-var-hint.helloWorld",
-        "title": "Hello World"
+        "id": "blade",
+        "aliases": ["Laravel Blade", "blade"],
+        "extensions": [".blade.php"]
       }
-    ]
+    ],
+    "configuration": {
+      "title": "Laravel Blade Type Sync",
+      "properties": {
+        "laravel-blade-variable-helper.enable": {
+          "type": "boolean",
+          "default": true,
+          "description": "Enable/disable the Laravel Blade Variable Helper"
+        },
+        "laravel-blade-variable-helper.controllerPaths": {
+          "type": "array",
+          "default": ["app/Http/Controllers/**/*.php"],
+          "description": "Paths to search for Laravel controllers"
+        }
+      }
+    }
   },
   "scripts": {
     "vscode:prepublish": "npm run compile",
