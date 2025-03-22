@@ -66,6 +66,7 @@
     "typescript": "^5.7.3"
   },
   "dependencies": {
+    "@rightcapital/phpdoc-parser": "^0.4.118",
     "php-parser": "^3.2.2",
     "vscode-languageclient": "^9.0.1",
     "vscode-languageserver": "^9.0.1",
