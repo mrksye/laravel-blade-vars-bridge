@@ -231,10 +231,10 @@ const handleCompletion = (params: TextDocumentPositionParams): CompletionItem[] 
         label: `${varName}`,
         insertText: varName.slice(1),
         kind: CompletionItemKind.Variable,
-        detail: `${'mixed'} - From ${'[HomeController.php](file:///app/Http/Controlles/Front/HomeController)'}`,
+        detail: `${'mixed'}`,
         documentation: {
           kind: 'markdown',
-          value: `コントローラーから渡された変数: ${varName}`
+          value: `From: ${'[HomeController.php](file:///app/Http/Controlles/Front/HomeController)'}`
         }
       });
     });
