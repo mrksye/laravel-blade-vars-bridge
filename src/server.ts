@@ -26,9 +26,9 @@ import { listControllerFiles, parseViewVariablesFromController } from './parsing
 (() => {
   const LOGLEVEL = 0;
 
-  console.debug = LOGLEVEL > 0 ? () => {} : console.debug; 
-  console.info = LOGLEVEL > 1 ? () => {} : console.info; 
-  console.warn = LOGLEVEL > 2 ? () => {} : console.warn; 
+  console.debug = LOGLEVEL > 0 ? () => { } : console.debug;
+  console.info = LOGLEVEL > 1 ? () => { } : console.info;
+  console.warn = LOGLEVEL > 2 ? () => { } : console.warn;
   // console.errorは常に表示。
 })();
 
@@ -96,7 +96,7 @@ const initializeServer = (_: InitializeParams): InitializeResult => {
       }
     }
   };
-}
+};
 
 /**
  * ホバーハンドラーの登録

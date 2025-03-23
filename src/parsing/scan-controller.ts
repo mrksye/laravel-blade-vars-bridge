@@ -60,20 +60,36 @@ export const parseViewVariablesFromController = (parser: Engine, filePath: strin
 
 
 
+/**
+ * 
+ * 未確認
+ */
 type Argument = Expression;
 
+/**
+ * 
+ * 未確認
+ */
 interface CallExpression extends Node {
   kind: 'call';
   what: Node;
   arguments: Node[];
 }
 
+/**
+ * 
+ * 未確認
+ */
 interface PropertyLookup extends Node {
   kind: 'propertylookup';
   what: Node;
   offset: Node;
 }
 
+/**
+ * 名前のNode。
+ * 型定義確認済み
+ */
 interface NameNode extends Node {
   kind: 'name',
   loc: Location,
@@ -81,11 +97,19 @@ interface NameNode extends Node {
   resolution: string,
 }
 
+/**
+ * 
+ * 未確認
+ */
 interface Identifier extends Node {
   kind: 'identifier';
   name: string;
 }
 
+/**
+ * 文字列のNode。
+ * 型定義確認済み
+ */
 interface StringNode extends Node {
   kind: 'string',
   loc: Location,
@@ -97,11 +121,20 @@ interface StringNode extends Node {
 
 
 
+
+/**
+ * 
+ * 未確認
+ */
 interface ArrayNode extends Node {
   kind: 'array';
   items: Entry[];
 }
 
+/**
+ * 
+ * 未確認
+ */
 interface Entry extends Node {
   kind: 'entry';
   key: Node;
@@ -128,22 +161,42 @@ const traverseAST = (node: Node & Record<string, any>, callback: (node: Node | n
 };
 
 
+/**
+ * 
+ * 未確認
+ */
 const isCallExpression = (node: Node | null): node is CallExpression => {
   return node !== null && node.kind === 'call';
 };
 
+/**
+ * 
+ * 未確認
+ */
 const isPropertyLookup = (node: Node | null): node is PropertyLookup => {
   return node !== null && node.kind === 'propertylookup';
 };
 
+/**
+ * 
+ * 未確認
+ */
 const isIdentifier = (node: Node | null): node is Identifier => {
   return node !== null && node.kind === 'identifier';
 };
 
+/**
+ * 
+ * 未確認
+ */
 const isString = (node: Node | null): node is StringNode => {
   return node !== null && node.kind === 'string';
 };
 
+/**
+ * 
+ * 未確認
+ */
 const isArray = (node: Node | null): node is ArrayNode => {
   return node !== null &&
     node.kind === 'array' &&
@@ -151,6 +204,10 @@ const isArray = (node: Node | null): node is ArrayNode => {
     'shortForm' in node;
 };
 
+/**
+ * 
+ * 未確認
+ */
 const isEntry = (node: Node | null): node is Entry => {
   return node !== null &&
     node.kind === 'entry' &&
@@ -158,12 +215,20 @@ const isEntry = (node: Node | null): node is Entry => {
     'value' in node;
 };
 
+/**
+ * 
+ * 未確認
+ */
 const isViewCall = (node: CallExpression): boolean => {
   if (isPropertyLookup(node.what)) { return false; }
   const nameNode = node.what as NameNode;
   return nameNode.name === 'view';
 };
 
+/**
+ * 
+ * 未確認
+ */
 const parseViewCall = (node: CallExpression): Record<string, string[]> | undefined => {
   const viewArgs = node.arguments as Argument[];
 
@@ -206,6 +271,10 @@ const getEntryKeyNameAsBladeVariable = (entry: Entry): string|undefined => {
   }
 };
 
+/**
+ * 
+ * 未確認
+ */
 const extractVariablesFromArray = (node: ArrayNode, depth = 0): string[] | undefined => {
   if (!node.items || depth > 5) { return; }
 
@@ -222,6 +291,5 @@ const extractVariablesFromArray = (node: ArrayNode, depth = 0): string[] | undef
 
   return variables;
 };
-
 
 
