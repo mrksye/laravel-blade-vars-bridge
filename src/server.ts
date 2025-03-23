@@ -14,8 +14,7 @@ import { TextDocument } from 'vscode-languageserver-textdocument';
 import { Engine } from 'php-parser';
 
 import { getWordRangeAtPosition } from './lib/document-fns';
-import { createJumpFileLinkText } from './lib/create-text-fns';
-import { listControllerFiles, parseViewVariablesFromController } from './parsing/scan-controller';
+import { BladeVarInfo, listControllerFiles, parseViewVariablesFromController, PHPType } from './parsing/scan-controller';
 
 
 
@@ -69,7 +68,7 @@ console.debug('各種設定を行います');
 
 let controllerPath = 'app/Http/Controllers';
 
-let bladeVariables: Record<string, string[]> = {};
+let allBladeVarInfos: BladeVarInfo[] = [];
 
 
 /** 
@@ -82,9 +81,9 @@ const initializeServer = (_: InitializeParams): InitializeResult => {
 
   console.debug(`Controller のファイル数は ${controllerPaths.length} です。`);
 
-  controllerPaths.forEach(async (filePath) => {
-    const variableInfo = parseViewVariablesFromController(phpParser, filePath);
-    bladeVariables = {...bladeVariables, ...variableInfo };
+  controllerPaths.forEach((filePath) => {
+    const bladeVarInfos = parseViewVariablesFromController(phpParser, filePath);
+    allBladeVarInfos = [...allBladeVarInfos, ...bladeVarInfos ];
   });
 
   return {
@@ -102,34 +101,30 @@ const initializeServer = (_: InitializeParams): InitializeResult => {
  * ホバーハンドラーの登録
  */
 const handleHover = (params: TextDocumentPositionParams): Hover | null => {
-
   const doc = documents.get(params.textDocument.uri);
   if (!doc) { return null; }
 
-  const document = documents.get(params.textDocument.uri);
-  if (!document) { return null; }
-
   const phpVarRegex = /\$([a-zA-Z_][a-zA-Z0-9_]*)/g;
+  const bladeUri = doc.uri;
 
-  const wordRange = getWordRangeAtPosition(document, params.position, phpVarRegex);
+  const wordRange = getWordRangeAtPosition(doc, params.position, phpVarRegex);
   if (!wordRange) { return null; }
 
-  const varName = document.getText(wordRange);
+  const varName = doc.getText(wordRange);
 
   console.debug(`Hover requested for variable: ${varName}`);
 
-  const hardCodedTypeName = 'mixed'; // TODO: ベタうちを書き換えて動くようにする！
-  console.info(`現在の実装では型はすべて${hardCodedTypeName}と表示されています!!`);
+  const varInfo = allBladeVarInfos.find((v) => (v.jumpTargetUri === bladeUri && v.name === varName));
+  if(!varInfo) { return null; }
 
-  const hardcodedFilePath = "app/Http/Controllers/Front/HomeController.php"; // TODO: ベタうちを書き換えて動くようにする！
-  console.info(`現在の実装ではファイルのリンクはハードコードされており ${hardcodedFilePath} がリンク先になります!!`);
+  const fileName = varInfo.definedInPath?.match(/[^\/]+$/)?.[0] || "";
 
   const content: MarkupContent = {
     kind: 'markdown',
     value: [
-      `**VarName:** \`${varName}\``,
-      `**Type:** \`${hardCodedTypeName}\``,
-      `**Source:** ${createJumpFileLinkText(`${workspaceRoot}/${hardcodedFilePath}`)}`
+      `**VarName:** \`${varInfo.name}\``,
+      `**Type:** \`${varInfo.type}\``,
+      `**Source:** ${`[${fileName}](${varInfo.definedInPath})`}`,
     ].join('\n\n')
   };
 
@@ -137,32 +132,6 @@ const handleHover = (params: TextDocumentPositionParams): Hover | null => {
     contents: content
   };
 };
-
-// PHPの型情報
-type PHPType =
-  | 'string'
-  | 'int'
-  | 'float'
-  | 'bool'
-  | 'array'
-  | 'object'
-  | 'null'
-  | 'mixed'
-  | 'void'
-  | 'Carbon'
-  | 'Collection'
-  | 'Builder'
-  | 'Model'
-  | 'Request'
-  | 'Response'
-  | 'View'
-  | `array<${string}>`
-  | `Collection<${string}>`
-  | `${string}[]`
-  | `${string}|${string}`
-  | `?${string}`
-  | `${string}|null`
-  | string;
 
 
 // 一般的なLaravelのコレクション関連の型マッピング
@@ -191,16 +160,14 @@ const handleCompletion = (params: TextDocumentPositionParams): CompletionItem[] 
   if (!doc) { return []; }
 
   const bladeUri = doc.uri;
-  console.debug('bladeのURIのはず');
-  console.debug(bladeUri);
 
   const text = doc.getText();
   const lines = text.split('\n');
   const line = lines[params.position.line];
   const linePrefix = line.slice(0, params.position.character);
 
-  const phpVarRegex = /\${1}/; // $検出
-  const variableMatch = linePrefix.match(phpVarRegex);
+  const phpVarRegex = /\$(?!\$)/g; // $検出
+  const variableMatch = linePrefix.match(phpVarRegex); // $$は検出しないようにしたいけどわからん。
   if (!variableMatch) { return []; }
 
   const variableName = variableMatch[1];
@@ -223,22 +190,22 @@ const handleCompletion = (params: TextDocumentPositionParams): CompletionItem[] 
     }
   }
 
-  const varNames = bladeVariables[bladeUri]; // 完全一致で検索
-  console.debug(varNames);
-  if (varNames) {
-    varNames.forEach((varName) => {
-      completionItems.push({
-        label: `${varName}`,
-        insertText: varName.slice(1),
-        kind: CompletionItemKind.Variable,
-        detail: `${'mixed'}`,
-        documentation: {
-          kind: 'markdown',
-          value: `From: ${'[HomeController.php](file:///app/Http/Controlles/Front/HomeController)'}`
-        }
-      });
+  const varInfos = allBladeVarInfos.filter((v) => v.jumpTargetUri === bladeUri); // 完全一致で検索
+
+  varInfos.forEach((varInfo) => {
+    const fileName = varInfo.definedInPath!.match(/[^\/]+$/)?.[0] || "";
+    completionItems.push({
+      label: `${varInfo.name}`,
+      insertText: varInfo.name.slice(1), // $を省いてインサート
+      kind: CompletionItemKind.Variable,
+      detail: `${'mixed'}`,
+      documentation: {
+        kind: 'markdown',
+        value: `From: ${`[${fileName}](${varInfo.definedInPath!}))`}`,
+      }
     });
-  }
+  });
+
   return completionItems;
 };
 

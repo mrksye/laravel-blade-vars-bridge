@@ -1,7 +1,6 @@
 import fs from 'fs';
 import { sync as glob } from 'fast-glob';
 import { Engine, Expression, Location, Node } from 'php-parser';
-import path from 'path';
 
 /**
  * Controllerを全部、走査する。
@@ -28,26 +27,32 @@ export const listControllerFiles = (controllersPath: string): string[] => {
 // /**
 //  * Controllerのコードを解析し、Viewに渡される変数を抽出
 //  */
-export const parseViewVariablesFromController = (parser: Engine, filePath: string): Record<string, string[]> => {
-  const rawCode = fs.readFileSync(filePath, 'utf-8');
-  const ast = parser.parseCode(rawCode, filePath);
-  console.debug(`${filePath}: AST parsed success!!`);
-
-  let bladeVariables: Record<string, string[]> = {};
+export const parseViewVariablesFromController = (parser: Engine, controllerPath: string): BladeVarInfo[] => {
+  const rawCode = fs.readFileSync(controllerPath, 'utf-8');
+  const ast = parser.parseCode(rawCode, controllerPath);
+  
+  let bladeVarInfo: BladeVarInfo[] = [];
   traverseAST(ast, (node) => {
     if (!node) { return; }
-    
+
     if (!isCallExpression(node)) { return; }
-    
+
     const callNode = node as CallExpression;
-    
+
     if (isViewCall(callNode)) {
-      bladeVariables = {...bladeVariables, ...parseViewCall(callNode)};
+      const varNameSourceJumpTos = parseViewCall(callNode);
+      bladeVarInfo = varNameSourceJumpTos.map((v) => ({
+        name: v.name,
+        source: v.source,
+        jumpTargetUri: v.jumpTargetUri!,
+        definedInPath: controllerPath,
+        type: 'mixed', // ベタうちやべぇ！！
+      }));
     }
   });
 
-  console.debug(`${path.basename(filePath)} スキャン success!`);
-  return bladeVariables;
+  console.debug(`[DEBUG] processing scan: ${controllerPath}`);
+  return bladeVarInfo;
 };
 
 
@@ -119,7 +124,16 @@ interface StringNode extends Node {
   isDoubleQuote: boolean,
 }
 
-
+/**
+ * 変数のNode。
+ * 型定義確認済み
+ */
+interface VariableNode extends Node {
+  kind: 'variable',
+  loc: Location,
+  name: string,
+  curly: boolean,
+}
 
 
 /**
@@ -132,13 +146,16 @@ interface ArrayNode extends Node {
 }
 
 /**
- * 
- * 未確認
+ * 配列のエントリー
+ * 確認済み
  */
 interface Entry extends Node {
-  kind: 'entry';
-  key: Node;
-  value: Node;
+  kind: 'entry',
+  loc: Location,
+  key: Node,
+  value: Node,
+  byRef: boolean,
+  unpack: boolean,
 }
 
 /**
@@ -186,11 +203,17 @@ const isIdentifier = (node: Node | null): node is Identifier => {
 };
 
 /**
- * 
- * 未確認
+ * 確認済み
  */
-const isString = (node: Node | null): node is StringNode => {
+const isStringNode = (node: Node | null): node is StringNode => {
   return node !== null && node.kind === 'string';
+};
+
+/**
+ * 確認済み
+ */
+const isVariableNode = (node: Node | null): node is StringNode => {
+  return node !== null && node.kind === 'variable';
 };
 
 /**
@@ -215,81 +238,116 @@ const isEntry = (node: Node | null): node is Entry => {
     'value' in node;
 };
 
+// PHPの型情報
+export type PHPType =
+  | 'string'
+  | 'int'
+  | 'float'
+  | 'bool'
+  | 'array'
+  | 'object'
+  | 'null'
+  | 'mixed'
+  | 'void'
+  | 'Carbon'
+  | 'Collection'
+  | 'Builder'
+  | 'Model'
+  | 'Request'
+  | 'Response'
+  | 'View'
+  | `array<${string}>`
+  | `Collection<${string}>`
+  | `${string}[]`
+  | `${string}|${string}`
+  | `?${string}`
+  | `${string}|null`
+  | string;
+
 /**
- * 
- * 未確認
+ * 変数情報を格納する型
+ */
+export type VarNameSourceJumpTos = {
+  name: string;
+  source: string;
+  jumpTargetUri?: string;
+}
+
+/**
+ * 変数情報を格納する型
+ */
+export type BladeVarInfo = {
+  name: string;
+  source: string;
+  jumpTargetUri: string;
+  docComment?: string;
+  definedInPath?: string;
+  namespace?: string;
+  type?: PHPType;
+  properties?: Record<string, string>;
+}
+
+/**
+ * CallExpressionのなかでも関数名がviewのものを取り出し
  */
 const isViewCall = (node: CallExpression): boolean => {
   if (isPropertyLookup(node.what)) { return false; }
   const nameNode = node.what as NameNode;
-  return nameNode.name === 'view';
+  return nameNode.name === 'view'; // 呼び出し式の名が`view`のもの。
 };
 
 /**
- * 
- * 未確認
+ * キーをbladeのファイルパス、値をその渡した変数情報で返す
  */
-const parseViewCall = (node: CallExpression): Record<string, string[]> | undefined => {
+const parseViewCall = (node: CallExpression): VarNameSourceJumpTos[] => {
   const viewArgs = node.arguments as Argument[];
 
   const dotNotationBladePath = (viewArgs[0] as StringNode).value;
-
-  console.debug('ブレイドのURI');
   const bladeFilePath = convertToBladeFilePath(dotNotationBladePath);
-  console.debug(bladeFilePath);
 
   if (viewArgs.length > 1 && viewArgs[1].kind === 'array') {
     const arrayNode = viewArgs[1] as ArrayNode;
-    const variables = extractVariablesFromArray(arrayNode);
-    console.debug(`Found variables: ${variables}`);
-    if(bladeFilePath && variables) {
-      return {[bladeFilePath]: variables};
+    const varNameSources = extractVariablesFromArray(arrayNode);
+
+    if (bladeFilePath && varNameSources) {
+      const varNameSourceJumpTos = varNameSources.map(v => ({...v, jumpTargetUri: bladeFilePath}));
+      return varNameSourceJumpTos;
     }
   }
+  return [];
 };
 
 /**
- * ドットをスラッシュに置換
- * Laravelの標準的なビューパスに変換（resources/views/からの相対パス）
- * 最後に.blade.phpを追加
+ * ドットをスラッシュに置換。Laravelの標準的なビューパスに変換（resources/views/からの相対パス）最後に.blade.phpを追加
  */
-const convertToBladeFilePath = (dotNotationPath?: string): string|undefined => {
-  if(!dotNotationPath) { return; }
+const convertToBladeFilePath = (dotNotationPath?: string): string | undefined => {
+  if (!dotNotationPath) { return; }
   const relativePath = dotNotationPath?.replace(/\./g, '/');
   const workspaceRoot = process.cwd(); // プロジェクトのルートパス
-  const absoluteViewPath = `file://${workspaceRoot}/resources/views`
+  const absoluteViewPath = `file://${workspaceRoot}/resources/views`;
   return `${absoluteViewPath}/${relativePath}.blade.php`;
 };
 
 /**
- * 
- * 未確認
+ * ASTNodeを、VariableInfoという独自型に変換。
  */
-const getEntryKeyNameAsBladeVariable = (entry: Entry): string|undefined => {
-  if (isString(entry.key)) {
-    return `$${entry.key.value}`;
-  }
-};
-
-/**
- * 
- * 未確認
- */
-const extractVariablesFromArray = (node: ArrayNode, depth = 0): string[] | undefined => {
+const extractVariablesFromArray = (node: ArrayNode, depth = 0): VarNameSourceJumpTos[] | undefined => {
   if (!node.items || depth > 5) { return; }
 
-  let variables: string[] = [];
+  let varNameSources: VarNameSourceJumpTos[] = [];
 
   node.items.forEach(item => {
     if (!isEntry(item)) { return; }
 
-    const variable = getEntryKeyNameAsBladeVariable(item);
-    if(variable) {
-      variables.push(variable);
+    if (isStringNode(item.key) && isVariableNode(item.value)) {
+      varNameSources.push({
+        name: `$${(item.key as StringNode).value}`,
+        source: item.value.loc?.source ?? 'undefined',
+      });
     }
   });
 
-  return variables;
+  return varNameSources;
 };
 
 
