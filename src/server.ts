@@ -9,16 +9,20 @@ import {
   MarkupContent,
 } from 'vscode-languageserver/node';
 import { TextDocument } from 'vscode-languageserver-textdocument';
+import { Engine } from 'php-parser';
 
 import { getWordRangeAtPosition } from './lib/document-fns';
 import { createJumpFileLinkText } from './lib/create-text-fns';
+import { listControllerFiles, parseViewVariablesFromController } from './parsing/scan-controller';
+
+
 
 
 /**
  * デバッグ用ログ出力レベル設定
  */
 (() => {
-  const LOGLEVEL = 1;
+  const LOGLEVEL = 0;
 
   console.debug = LOGLEVEL > 0 ? () => {} : console.debug; 
   console.info = LOGLEVEL > 1 ? () => {} : console.info; 
@@ -34,12 +38,52 @@ const documents = new TextDocuments(TextDocument);
 
 const workspaceRoot = process.cwd(); // プロジェクトのルートパス
 
+const phpVersion = '8.2';
+
+console.log(`PHP-Parser target version: ${phpVersion}`);
+
+const phpParser = new Engine({
+  parser: {
+    debug: false,
+    locations: false,
+    extractDoc: true,
+    suppressErrors: true,
+    phpVersion: phpVersion,
+  },
+  ast: {
+    withPositions: true,
+    withSource: true,
+  },
+  lexer: {
+    all_tokens: false,
+    comment_tokens: false,
+    mode_eval: false,
+    asp_tags: false,
+    short_tags: false
+  },
+});
+
+console.debug('各種設定を行います');
+
+let controllerPath = 'app/Http/Controllers';
+
+
+
 
 /** 
  * 初期化処理
  */
 const initializeServer = (params: InitializeParams): InitializeResult => {
   console.log('Language server initializing...');
+
+  const controllerPaths = listControllerFiles(controllerPath);
+
+  console.debug(`Controller のファイル数は ${controllerPaths.length} です。`)
+
+  controllerPaths.forEach(async (filePath) => {
+    const parsed = parseViewVariablesFromController(phpParser, filePath);
+    console.debug(`Bladeに渡される変数の個数は: ${parsed.split(',').length}`);
+  });
 
   return {
     capabilities: {
