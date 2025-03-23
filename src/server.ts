@@ -7,6 +7,8 @@ import {
   Hover,
   InitializeResult,
   MarkupContent,
+  CompletionItem,
+  CompletionItemKind,
 } from 'vscode-languageserver/node';
 import { TextDocument } from 'vscode-languageserver-textdocument';
 import { Engine } from 'php-parser';
@@ -67,22 +69,22 @@ console.debug('各種設定を行います');
 
 let controllerPath = 'app/Http/Controllers';
 
-
+let bladeVariables: Record<string, string[]> = {};
 
 
 /** 
  * 初期化処理
  */
-const initializeServer = (params: InitializeParams): InitializeResult => {
+const initializeServer = (_: InitializeParams): InitializeResult => {
   console.log('Language server initializing...');
 
   const controllerPaths = listControllerFiles(controllerPath);
 
-  console.debug(`Controller のファイル数は ${controllerPaths.length} です。`)
+  console.debug(`Controller のファイル数は ${controllerPaths.length} です。`);
 
   controllerPaths.forEach(async (filePath) => {
-    const parsed = parseViewVariablesFromController(phpParser, filePath);
-    console.debug(`Bladeに渡される変数の個数は: ${parsed.split(',').length}`);
+    const variableInfo = parseViewVariablesFromController(phpParser, filePath);
+    bladeVariables = {...bladeVariables, ...variableInfo };
   });
 
   return {
@@ -134,12 +136,118 @@ const handleHover = (params: TextDocumentPositionParams): Hover | null => {
   return {
     contents: content
   };
-}
+};
+
+// PHPの型情報
+type PHPType =
+  | 'string'
+  | 'int'
+  | 'float'
+  | 'bool'
+  | 'array'
+  | 'object'
+  | 'null'
+  | 'mixed'
+  | 'void'
+  | 'Carbon'
+  | 'Collection'
+  | 'Builder'
+  | 'Model'
+  | 'Request'
+  | 'Response'
+  | 'View'
+  | `array<${string}>`
+  | `Collection<${string}>`
+  | `${string}[]`
+  | `${string}|${string}`
+  | `?${string}`
+  | `${string}|null`
+  | string;
+
+
+// 一般的なLaravelのコレクション関連の型マッピング
+const laravelCollectionTypes: Record<string, PHPType> = {
+  'all': 'array',
+  'avg': 'float',
+  'contains': 'bool',
+  'count': 'int',
+  'first': 'mixed',
+  'firstWhere': 'mixed',
+  'get': 'mixed',
+  'isEmpty': 'bool',
+  'isNotEmpty': 'bool',
+  'last': 'mixed',
+  'pluck': 'Collection',
+  'toArray': 'array',
+  'toJson': 'string',
+  'where': 'Collection'
+};
+
+/**
+ * 入力補完の登録
+ */
+const handleCompletion = (params: TextDocumentPositionParams): CompletionItem[] => {
+  const doc = documents.get(params.textDocument.uri);
+  if (!doc) { return []; }
+
+  const bladeUri = doc.uri;
+  console.debug('bladeのURIのはず');
+  console.debug(bladeUri);
+
+  const text = doc.getText();
+  const lines = text.split('\n');
+  const line = lines[params.position.line];
+  const linePrefix = line.slice(0, params.position.character);
+
+  const phpVarRegex = /\${1}/; // $検出
+  const variableMatch = linePrefix.match(phpVarRegex);
+  if (!variableMatch) { return []; }
+
+  const variableName = variableMatch[1];
+  let completionItems: CompletionItem[] = [];
+
+  const propAccessMatch = linePrefix.match(/\$([a-zA-Z_][a-zA-Z0-9_]*)->$/);
+  if (propAccessMatch) {
+    let varType: PHPType = 'Collection';
+
+    if (varType === 'Collection') {
+      return Object.entries(laravelCollectionTypes).map(([methodName, returnType]) => ({
+        label: methodName, // Collectionメソッド補完
+        kind: CompletionItemKind.Method,
+        detail: `${returnType} - Collectionメソッド`,
+        documentation: {
+          kind: 'markdown',
+          value: `Collectionのメソッド: ${methodName}\n\n戻り値の型: ${returnType}`
+        }
+      }));
+    }
+  }
+
+  const varNames = bladeVariables[bladeUri]; // 完全一致で検索
+  console.debug(varNames);
+  if (varNames) {
+    varNames.forEach((varName) => {
+      completionItems.push({
+        label: `${varName}`,
+        insertText: varName.slice(1),
+        kind: CompletionItemKind.Variable,
+        detail: `${'mixed'} - From ${'[HomeController.php](file:///app/Http/Controlles/Front/HomeController)'}`,
+        documentation: {
+          kind: 'markdown',
+          value: `コントローラーから渡された変数: ${varName}`
+        }
+      });
+    });
+  }
+  return completionItems;
+};
+
 
 
 
 connection.onInitialize(initializeServer);
 connection.onHover(handleHover); // イベントハンドラーの設定
+connection.onCompletion(handleCompletion); // イベントハンドラーの設定
 
 documents.listen(connection); // ドキュメントの監視
 
