@@ -122,7 +122,7 @@ const handleHover = (params: TextDocumentPositionParams): Hover | null => {
   const content: MarkupContent = {
     kind: 'markdown',
     value: [
-      `**VarName:** \`${varInfo.name}\``,
+      `**Vars:** \`${varInfo.name}\``,
       `**Type:** \`${varInfo.type}\``,
       `**Source:** ${`[${fileName}](${varInfo.definedInPath})`}`,
     ].join('\n\n')
