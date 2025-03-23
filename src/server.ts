@@ -127,7 +127,7 @@ const handleHover = (params: TextDocumentPositionParams): Hover | null => {
     value: [
       `**VarName:** \`${varName}\``,
       `**Type:** \`${hardCodedTypeName}\``,
-      `**Source:** ${createJumpFileLinkText(`${workspaceRoot}}/${hardcodedFilePath}`)}` 
+      `**Source:** ${createJumpFileLinkText(`${workspaceRoot}/${hardcodedFilePath}`)}`
     ].join('\n\n')
   };
 
