@@ -3,6 +3,10 @@
   "displayName": "Laravel-Blade-Var-Hint",
   "description": "Autocompletion and Type Hint for Laravel Blade variables",
   "version": "0.0.1",
+  "publisher": "mrksye",
+  "author": {
+    "name": "Yusuke Nakamura"
+  },
   "engines": {
     "vscode": "^1.98.0"
   },
