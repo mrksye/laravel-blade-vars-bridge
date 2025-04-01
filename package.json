@@ -2,7 +2,7 @@
   "name": "laravel-blade-var-hint",
   "displayName": "Laravel-Blade-Var-Hint",
   "description": "Autocompletion and Type Hint for Laravel Blade variables",
-  "version": "0.0.1",
+  "version": "0.0.2",
   "publisher": "mrksye",
   "author": {
     "name": "Yusuke Nakamura"
