@@ -91,7 +91,7 @@ return view('someview', array(
 
 ## 发行说明
 
-### 0.0.3
+### 0.0.4
 - 更新扩展名称为 Laravel Var Bridge
 - 改进变量检测
 

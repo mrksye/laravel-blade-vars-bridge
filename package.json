@@ -2,7 +2,7 @@
   "name": "laravel-blade-vars-bridge",
   "displayName": "Laravel-Blade-Vars-Bridge",
   "description": "Laravel Blade variables autocomplete and IntelliSense - Bridge controller variables to Blade templates with hover information and completion",
-  "version": "0.0.3",
+  "version": "0.0.4",
   "publisher": "mrksye",
   "license": "MIT",
   "author": {

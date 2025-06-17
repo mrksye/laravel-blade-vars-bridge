@@ -88,7 +88,7 @@ This extension contributes the following settings:
 
 ## Release Notes
 
-### 0.0.3
+### 0.0.4
 - Updated extension name to Laravel Var Bridge
 - Improved variable detection
 
