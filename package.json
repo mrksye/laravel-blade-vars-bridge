@@ -1,7 +1,7 @@
 {
   "name": "laravel-blade-vars-bridge",
   "displayName": "Laravel-Blade-Vars-Bridge",
-  "description": "Variable completion and hover information for Laravel Blade templates based on Controller variables",
+  "description": "Laravel Blade variables autocomplete and IntelliSense - Bridge controller variables to Blade templates with hover information and completion",
   "version": "0.0.3",
   "publisher": "mrksye",
   "license": "MIT",
@@ -29,7 +29,15 @@
     "variables",
     "controller",
     "type",
-    "hint"
+    "hint",
+    "laravel vars",
+    "laravel blade vars",
+    "laravel blade variables",
+    "blade variables",
+    "blade autocomplete",
+    "laravel intellisense",
+    "laravel vscode",
+    "laravel extension"
   ],
   "engines": {
     "vscode": "^1.98.0"
