@@ -3,9 +3,9 @@
 **日本語のREADMEは [README.ja.md](README.ja.md) をご覧ください。**
 **English README is available at [README.md](README.md).**
 
-# Laravel Var Bridge
+# Laravel Vars Bridge
 
-Laravel Var Bridge 是一个 VSCode 扩展，基于从控制器传递的变量为 Laravel Blade 模板提供变量补全功能。
+Laravel Vars Bridge 是一个 VSCode 扩展，基于从控制器传递的变量为 Laravel Blade 模板提供变量补全功能。
 
 **注意**：不检索类型信息，因此无法获取属性信息和其他特定类型的补全。
 
@@ -17,13 +17,11 @@ Laravel Var Bridge 是一个 VSCode 扩展，基于从控制器传递的变量�
 
 ## 安装
 
-### 从 VSIX 包安装
-```sh
-code --install-extension laravel-blade-var-bridge-0.0.2.vsix
-```
-
 ### 从 VS Code 市场安装
-在 VS Code 扩展市场中搜索 "Laravel Var Bridge"。
+1. 打开 VS Code
+2. 转到扩展 (Ctrl+Shift+X)
+3. 搜索 "Laravel Blade Vars Bridge"
+4. 点击安装
 
 ## 配置
 
@@ -93,7 +91,7 @@ return view('someview', array(
 
 ## 发行说明
 
-### 0.0.2
+### 0.0.3
 - 更新扩展名称为 Laravel Var Bridge
 - 改进变量检测
 

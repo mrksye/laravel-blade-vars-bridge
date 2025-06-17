@@ -1,19 +1,19 @@
 {
-  "name": "laravel-blade-var-bridge",
-  "displayName": "Laravel-Blade-Var-Bridge",
+  "name": "laravel-blade-vars-bridge",
+  "displayName": "Laravel-Blade-Vars-Bridge",
   "description": "Variable completion and hover information for Laravel Blade templates based on Controller variables",
-  "version": "0.0.2",
+  "version": "0.0.3",
   "publisher": "mrksye",
   "author": {
     "name": "Yusuke Nakamura"
   },
   "repository": {
     "type": "git",
-    "url": "https://github.com/mrksye/laravel-blade-var-bridge.git"
+    "url": "https://github.com/mrksye/laravel-blade-vars-bridge.git"
   },
-  "homepage": "https://github.com/mrksye/laravel-blade-var-bridge",
+  "homepage": "https://github.com/mrksye/laravel-blade-vars-bridge",
   "bugs": {
-    "url": "https://github.com/mrksye/laravel-blade-var-bridge/issues"
+    "url": "https://github.com/mrksye/laravel-blade-vars-bridge/issues"
   },
   "readme": {
     "ja": "README.ja.md",
@@ -58,14 +58,14 @@
       }
     ],
     "configuration": {
-      "title": "Laravel Blade Var Bridge",
+      "title": "Laravel Blade Vars Bridge",
       "properties": {
-        "laravel-blade-variable-helper.enable": {
+        "laravel-blade-vars-bridge.enable": {
           "type": "boolean",
           "default": true,
-          "description": "Enable/disable the Laravel Blade Variable Helper"
+          "description": "Enable/disable the Laravel Blade Vars Bridge"
         },
-        "laravel-blade-variable-helper.controllerPaths": {
+        "laravel-blade-vars-bridge.controllerPaths": {
           "type": "array",
           "default": [
             "app/Http/Controllers/**/*.php"

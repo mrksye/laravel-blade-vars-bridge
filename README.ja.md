@@ -1,6 +1,6 @@
-# Laravel Var Bridge
+# Laravel Vars Bridge
 
-Laravel Var Bridge は、VSCode で Laravel の Controller から渡された変数を入力保管できる拡張機能です。
+Laravel Vars Bridge は、VSCode で Laravel の Controller から渡された変数を入力保管できる拡張機能です。
 
 ※型情報は取得していないため、プロパティ情報などは予測変換されません。
 
@@ -13,9 +13,11 @@ Laravel Var Bridge は、VSCode で Laravel の Controller から渡された変
 
 ## インストール
 
-```sh
-code --install-extension laravel-blade-var-bridge-0.0.2.vsix
-```
+### VS Code マーケットプレイスから
+1. VS Code を開く
+2. 拡張機能タブを開く (Ctrl+Shift+X)
+3. "Laravel Blade Vars Bridge" を検索
+4. インストールをクリック
 
 ## 設定
 特別な設定は不要です。

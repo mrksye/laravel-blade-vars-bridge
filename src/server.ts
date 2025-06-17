@@ -20,7 +20,7 @@ import { BladeVarInfo, listControllerFiles, parseViewVariablesFromController, PH
 
 
 /**
- * デバッグ用ログ出力レベル設定
+ * Debug log output level setting
  */
 (() => {
   const LOGLEVEL = 0;
@@ -28,16 +28,16 @@ import { BladeVarInfo, listControllerFiles, parseViewVariablesFromController, PH
   console.debug = LOGLEVEL > 0 ? () => { } : console.debug;
   console.info = LOGLEVEL > 1 ? () => { } : console.info;
   console.warn = LOGLEVEL > 2 ? () => { } : console.warn;
-  // console.errorは常に表示。
+  // console.error is always displayed.
 })();
 
 
 
-const connection = createConnection(ProposedFeatures.all); // 接続を作成
+const connection = createConnection(ProposedFeatures.all); // Create connection
 
 const documents = new TextDocuments(TextDocument);
 
-const workspaceRoot = process.cwd(); // プロジェクトのルートパス
+const workspaceRoot = process.cwd(); // Project root path
 
 const phpVersion = '8.2';
 
@@ -72,14 +72,14 @@ let allBladeVarInfos: BladeVarInfo[] = [];
 
 
 /** 
- * 初期化処理
+ * Initialization process
  */
 const initializeServer = (_: InitializeParams): InitializeResult => {
   console.log('Language server initializing...');
 
   const controllerPaths = listControllerFiles(controllerPath);
 
-  console.debug(`Controller のファイル数は ${controllerPaths.length} です。`);
+  console.debug(`Number of controller files: ${controllerPaths.length}`);
 
   controllerPaths.forEach((filePath) => {
     const bladeVarInfos = parseViewVariablesFromController(phpParser, filePath);
@@ -98,7 +98,7 @@ const initializeServer = (_: InitializeParams): InitializeResult => {
 };
 
 /**
- * ホバーハンドラーの登録
+ * Register hover handler
  */
 const handleHover = (params: TextDocumentPositionParams): Hover | null => {
   const doc = documents.get(params.textDocument.uri);
@@ -134,7 +134,7 @@ const handleHover = (params: TextDocumentPositionParams): Hover | null => {
 };
 
 
-// 一般的なLaravelのコレクション関連の型マッピング
+// Common Laravel collection type mappings
 const laravelCollectionTypes: Record<string, PHPType> = {
   'all': 'array',
   'avg': 'float',
@@ -153,7 +153,7 @@ const laravelCollectionTypes: Record<string, PHPType> = {
 };
 
 /**
- * 入力補完の登録
+ * Register input completion
  */
 const handleCompletion = (params: TextDocumentPositionParams): CompletionItem[] => {
   const doc = documents.get(params.textDocument.uri);
@@ -166,8 +166,8 @@ const handleCompletion = (params: TextDocumentPositionParams): CompletionItem[] 
   const line = lines[params.position.line];
   const linePrefix = line.slice(0, params.position.character);
 
-  const phpVarRegex = /\$(?!\$)/g; // $検出
-  const variableMatch = linePrefix.match(phpVarRegex); // $$は検出しないようにしたいけどわからん。
+  const phpVarRegex = /\$(?!\$)/g; // Detect $
+  const variableMatch = linePrefix.match(phpVarRegex); // Want to avoid detecting $$ but not sure how.
   if (!variableMatch) { return []; }
 
   const variableName = variableMatch[1];
@@ -179,24 +179,24 @@ const handleCompletion = (params: TextDocumentPositionParams): CompletionItem[] 
 
     if (varType === 'Collection') {
       return Object.entries(laravelCollectionTypes).map(([methodName, returnType]) => ({
-        label: methodName, // Collectionメソッド補完
+        label: methodName, // Collection method completion
         kind: CompletionItemKind.Method,
         detail: `${returnType} - Collectionメソッド`,
         documentation: {
           kind: 'markdown',
-          value: `Collectionのメソッド: ${methodName}\n\n戻り値の型: ${returnType}`
+          value: `Collection method: ${methodName}\n\nReturn type: ${returnType}`
         }
       }));
     }
   }
 
-  const varInfos = allBladeVarInfos.filter((v) => v.jumpTargetUri === bladeUri); // 完全一致で検索
+  const varInfos = allBladeVarInfos.filter((v) => v.jumpTargetUri === bladeUri); // Search by exact match
 
   varInfos.forEach((varInfo) => {
     const fileName = varInfo.definedInPath!.match(/[^\/]+$/)?.[0] || "";
     completionItems.push({
       label: `${varInfo.name}`,
-      insertText: varInfo.name.slice(1), // $を省いてインサート
+      insertText: varInfo.name.slice(1), // Insert without $
       kind: CompletionItemKind.Variable,
       detail: `${'mixed'}`,
       documentation: {
@@ -213,9 +213,9 @@ const handleCompletion = (params: TextDocumentPositionParams): CompletionItem[] 
 
 
 connection.onInitialize(initializeServer);
-connection.onHover(handleHover); // イベントハンドラーの設定
-connection.onCompletion(handleCompletion); // イベントハンドラーの設定
+connection.onHover(handleHover); // Set event handler
+connection.onCompletion(handleCompletion); // Set event handler
 
-documents.listen(connection); // ドキュメントの監視
+documents.listen(connection); // Monitor documents
 
-connection.listen(); // 接続の開始
+connection.listen(); // Start connection

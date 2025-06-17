@@ -1,7 +1,7 @@
 import { TextDocument, Range, Position } from "vscode-languageserver-textdocument";
 
 /**
- * とりあえず
+ * For now
  */
 const getWordRangeAtPosition = (doc: TextDocument, position: Position, regex: RegExp = /\$[\w]+/): Range|undefined => {
   const text = doc.getText();

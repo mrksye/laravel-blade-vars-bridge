@@ -13,16 +13,16 @@ let client: LanguageClient;
 
 
 /**
- * 拡張機能をアクティブ化する
- * @param {vscode.ExtensionContext} context - 拡張機能のコンテキスト
+ * Activate the extension
+ * @param {vscode.ExtensionContext} context - Extension context
  */
 export function activate(context: vscode.ExtensionContext) {
-	const outputChannel = vscode.window.createOutputChannel('Laravel Blade Var Hint Debug Channel');
-	outputChannel.appendLine('Laravel Blade Var Hint 拡張機能が有効化されました!');
+	const outputChannel = vscode.window.createOutputChannel('Laravel Blade Vars Bridge Debug Channel');
+	outputChannel.appendLine('Laravel Blade Vars Bridge extension has been activated!');
   outputChannel.show();
 
 	try {
-		const serverModule = context.asAbsolutePath(path.join('dist', 'server.js')); // サーバーモジュールのパス
+		const serverModule = context.asAbsolutePath(path.join('dist', 'server.js')); // Server module path
 
 		if (!fs.existsSync(serverModule)) {
 			vscode.window.showErrorMessage(`サーバーモジュールが見つかりません: ${serverModule}`);
@@ -49,62 +49,62 @@ export function activate(context: vscode.ExtensionContext) {
         { scheme: 'file', pattern: '**/*.blade.php' }
       ],
       synchronize: {
-        fileEvents: vscode.workspace.createFileSystemWatcher('{**/*.php,**/*.blade.php}') // ファイル変更を監視する
+        fileEvents: vscode.workspace.createFileSystemWatcher('{**/*.php,**/*.blade.php}') // Monitor file changes
       },
       outputChannel: outputChannel,
       initializationOptions: {
         laravel: {
-          phpstanConfigPath: vscode.workspace.getConfiguration('bladeVarHint').get('phpstanConfigPath'), // 型定義ファイルのパス
-          modelsPath: vscode.workspace.getConfiguration('bladeVarHint').get('modelsPath') || 'app/Models', // モデルのディレクトリパス
-          controllersPath: vscode.workspace.getConfiguration('bladeVarHint').get('controllersPath') || 'app/Http/Controllers' // コントローラーのディレクトリパス
+          phpstanConfigPath: vscode.workspace.getConfiguration('laravel-blade-vars-bridge').get('phpstanConfigPath'), // Type definition file path
+          modelsPath: vscode.workspace.getConfiguration('laravel-blade-vars-bridge').get('modelsPath') || 'app/Models', // Models directory path
+          controllersPath: vscode.workspace.getConfiguration('laravel-blade-vars-bridge').get('controllersPath') || 'app/Http/Controllers' // Controllers directory path
         }
       }
     };
 
     client = new LanguageClient(
       'laravelBladeVarHint',
-      'Laravel Blade Var Hint',
+      'Laravel Blade Vars Bridge',
       serverOptions,
       clientOptions
     );
 
     
     context.subscriptions.push(
-      vscode.commands.registerCommand('bladeVarHint.refreshVariables', () => {
-        vscode.window.showInformationMessage('変数情報を更新しています...');
+      vscode.commands.registerCommand('laravel-blade-vars-bridge.refreshVariables', () => {
+        vscode.window.showInformationMessage('Updating variable information...');
         client.sendNotification('custom/refreshVariables');
       }),
-    ); // コマンドの登録
+    ); // Register command
 
     const statusBarItem = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Right, 100);
     statusBarItem.text = '$(info) Blade Variables';
-    statusBarItem.tooltip = 'Bladeの変数情報を更新';
-    statusBarItem.command = 'bladeVarHint.refreshVariables';
-    statusBarItem.show(); // ステータスバーアイテムの追加
+    statusBarItem.tooltip = 'Update Blade variable information';
+    statusBarItem.command = 'laravel-blade-vars-bridge.refreshVariables';
+    statusBarItem.show(); // Add status bar item
 
     context.subscriptions.push(statusBarItem);
 
-    client.start(); // 開始する
+    client.start(); // Start client
 
     context.subscriptions.push(
       vscode.workspace.onDidChangeConfiguration(e => {
-        if (e.affectsConfiguration('bladeVarHint')) {
-          vscode.window.showInformationMessage('Blade Var Hint 設定が変更されました。拡張機能を再起動します。');
+        if (e.affectsConfiguration('laravel-blade-vars-bridge')) {
+          vscode.window.showInformationMessage('Laravel Blade Vars Bridge settings have been changed. Restarting extension.');
           restartClient();
         }
       })
-    ); // 設定変更時に再起動する
+    ); // Restart when settings change
 
-    outputChannel.appendLine('Laravel Blade Var Hint 拡張機能の有効化が完了しました');
+    outputChannel.appendLine('Laravel Blade Vars Bridge extension activation completed');
 
 	} catch (error) {
-		console.error('拡張機能の有効化に失敗しました:', error);
-		vscode.window.showErrorMessage(`Laravel Blade Var Hint 有効化エラー: ${error}`);
+		console.error('Failed to activate extension:', error);
+		vscode.window.showErrorMessage(`Laravel Blade Vars Bridge activation error: ${error}`);
 	}
 }
 
 /**
- * クライアントを再起動する
+ * Restart the client
  */
 async function restartClient(): Promise<void> {
 	if (!client) {
@@ -116,7 +116,7 @@ async function restartClient(): Promise<void> {
 }
 
 /**
- * 拡張機能を非アクティブ化する
+ * Deactivate the extension
  * @returns {Thenable<void>|undefined}
  */
 export function deactivate(): Thenable<void> | undefined {

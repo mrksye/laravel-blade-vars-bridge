@@ -1,8 +1,8 @@
 **日本語のREADMEは [README.ja.md](README.ja.md) をご覧ください。**
 
-# Laravel Var Bridge
+# Laravel Vars Bridge
 
-Laravel Var Bridge is a VSCode extension that provides variable completion for Laravel Blade templates based on variables passed from Controllers.
+Laravel Vars Bridge is a VSCode extension that provides variable completion for Laravel Blade templates based on variables passed from Controllers.
 
 **Note**: Type information is not retrieved, so property information and other type-specific completions are not available.
 
@@ -14,13 +14,11 @@ Laravel Var Bridge is a VSCode extension that provides variable completion for L
 
 ## Installation
 
-### From VSIX Package
-```sh
-code --install-extension laravel-blade-var-bridge-0.0.2.vsix
-```
-
 ### From VS Code Marketplace
-Search for "Laravel Var Bridge" in the VS Code Extensions marketplace.
+1. Open VS Code
+2. Go to Extensions (Ctrl+Shift+X)
+3. Search for "Laravel Blade Vars Bridge"
+4. Click Install
 
 ## Configuration
 
@@ -90,7 +88,7 @@ This extension contributes the following settings:
 
 ## Release Notes
 
-### 0.0.2
+### 0.0.3
 - Updated extension name to Laravel Var Bridge
 - Improved variable detection
 

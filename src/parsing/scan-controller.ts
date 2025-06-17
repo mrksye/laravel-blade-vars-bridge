@@ -3,7 +3,7 @@ import { sync as glob } from 'fast-glob';
 import { Engine, Expression, Location, Node } from 'php-parser';
 
 /**
- * Controllerを全部、走査する。
+ * Scan all controllers.
  */
 export const listControllerFiles = (controllersPath: string): string[] => {
   const controllerPattern = `${controllersPath}/**/*.php`;
@@ -25,7 +25,7 @@ export const listControllerFiles = (controllersPath: string): string[] => {
 };
 
 // /**
-//  * Controllerのコードを解析し、Viewに渡される変数を抽出
+//  * Parse controller code and extract variables passed to views
 //  */
 export const parseViewVariablesFromController = (parser: Engine, controllerPath: string): BladeVarInfo[] => {
   const rawCode = fs.readFileSync(controllerPath, 'utf-8');
@@ -46,7 +46,7 @@ export const parseViewVariablesFromController = (parser: Engine, controllerPath:
         source: v.source,
         jumpTargetUri: v.jumpTargetUri!,
         definedInPath: controllerPath,
-        type: 'mixed', // ベタうちやべぇ！！
+        type: 'mixed', // Hard-coded, dangerous!!
       }));
     }
   });
@@ -67,13 +67,13 @@ export const parseViewVariablesFromController = (parser: Engine, controllerPath:
 
 /**
  * 
- * 未確認
+ * Unconfirmed
  */
 type Argument = Expression;
 
 /**
  * 
- * 未確認
+ * Unconfirmed
  */
 interface CallExpression extends Node {
   kind: 'call';
@@ -83,7 +83,7 @@ interface CallExpression extends Node {
 
 /**
  * 
- * 未確認
+ * Unconfirmed
  */
 interface PropertyLookup extends Node {
   kind: 'propertylookup';
@@ -92,8 +92,8 @@ interface PropertyLookup extends Node {
 }
 
 /**
- * 名前のNode。
- * 型定義確認済み
+ * Name Node.
+ * Type definition confirmed
  */
 interface NameNode extends Node {
   kind: 'name',
@@ -104,7 +104,7 @@ interface NameNode extends Node {
 
 /**
  * 
- * 未確認
+ * Unconfirmed
  */
 interface Identifier extends Node {
   kind: 'identifier';
@@ -112,8 +112,8 @@ interface Identifier extends Node {
 }
 
 /**
- * 文字列のNode。
- * 型定義確認済み
+ * String Node.
+ * Type definition confirmed
  */
 interface StringNode extends Node {
   kind: 'string',
@@ -125,8 +125,8 @@ interface StringNode extends Node {
 }
 
 /**
- * 変数のNode。
- * 型定義確認済み
+ * Variable Node.
+ * Type definition confirmed
  */
 interface VariableNode extends Node {
   kind: 'variable',
@@ -138,7 +138,7 @@ interface VariableNode extends Node {
 
 /**
  * 
- * 未確認
+ * Unconfirmed
  */
 interface ArrayNode extends Node {
   kind: 'array';
@@ -146,8 +146,8 @@ interface ArrayNode extends Node {
 }
 
 /**
- * 配列のエントリー
- * 確認済み
+ * Array entry
+ * Confirmed
  */
 interface Entry extends Node {
   kind: 'entry',
@@ -159,7 +159,7 @@ interface Entry extends Node {
 }
 
 /**
- * ASTをトラバースする
+ * Traverse AST
  */
 const traverseAST = (node: Node & Record<string, any>, callback: (node: Node | null) => void) => {
   if (!node) { return; }
@@ -180,7 +180,7 @@ const traverseAST = (node: Node & Record<string, any>, callback: (node: Node | n
 
 /**
  * 
- * 未確認
+ * Unconfirmed
  */
 const isCallExpression = (node: Node | null): node is CallExpression => {
   return node !== null && node.kind === 'call';
@@ -188,7 +188,7 @@ const isCallExpression = (node: Node | null): node is CallExpression => {
 
 /**
  * 
- * 未確認
+ * Unconfirmed
  */
 const isPropertyLookup = (node: Node | null): node is PropertyLookup => {
   return node !== null && node.kind === 'propertylookup';
@@ -196,21 +196,21 @@ const isPropertyLookup = (node: Node | null): node is PropertyLookup => {
 
 /**
  * 
- * 未確認
+ * Unconfirmed
  */
 const isIdentifier = (node: Node | null): node is Identifier => {
   return node !== null && node.kind === 'identifier';
 };
 
 /**
- * 確認済み
+ * Confirmed
  */
 const isStringNode = (node: Node | null): node is StringNode => {
   return node !== null && node.kind === 'string';
 };
 
 /**
- * 確認済み
+ * Confirmed
  */
 const isVariableNode = (node: Node | null): node is StringNode => {
   return node !== null && node.kind === 'variable';
@@ -218,7 +218,7 @@ const isVariableNode = (node: Node | null): node is StringNode => {
 
 /**
  * 
- * 未確認
+ * Unconfirmed
  */
 const isArray = (node: Node | null): node is ArrayNode => {
   return node !== null &&
@@ -229,7 +229,7 @@ const isArray = (node: Node | null): node is ArrayNode => {
 
 /**
  * 
- * 未確認
+ * Unconfirmed
  */
 const isEntry = (node: Node | null): node is Entry => {
   return node !== null &&
@@ -238,7 +238,7 @@ const isEntry = (node: Node | null): node is Entry => {
     'value' in node;
 };
 
-// PHPの型情報
+// PHP type information
 export type PHPType =
   | 'string'
   | 'int'
@@ -265,7 +265,7 @@ export type PHPType =
   | string;
 
 /**
- * 変数情報を格納する型
+ * Type to store variable information
  */
 export type VarNameSourceJumpTos = {
   name: string;
@@ -274,7 +274,7 @@ export type VarNameSourceJumpTos = {
 }
 
 /**
- * 変数情報を格納する型
+ * Type to store variable information
  */
 export type BladeVarInfo = {
   name: string;
@@ -288,16 +288,16 @@ export type BladeVarInfo = {
 }
 
 /**
- * CallExpressionのなかでも関数名がviewのものを取り出し
+ * Extract CallExpression where function name is 'view'
  */
 const isViewCall = (node: CallExpression): boolean => {
   if (isPropertyLookup(node.what)) { return false; }
   const nameNode = node.what as NameNode;
-  return nameNode.name === 'view'; // 呼び出し式の名が`view`のもの。
+  return nameNode.name === 'view'; // Call expression named 'view'.
 };
 
 /**
- * キーをbladeのファイルパス、値をその渡した変数情報で返す
+ * Return with blade file path as key and passed variable information as value
  */
 const parseViewCall = (node: CallExpression): VarNameSourceJumpTos[] => {
   const viewArgs = node.arguments as Argument[];
@@ -318,18 +318,18 @@ const parseViewCall = (node: CallExpression): VarNameSourceJumpTos[] => {
 };
 
 /**
- * ドットをスラッシュに置換。Laravelの標準的なビューパスに変換（resources/views/からの相対パス）最後に.blade.phpを追加
+ * Replace dots with slashes. Convert to Laravel's standard view path (relative path from resources/views/) and add .blade.php at the end
  */
 const convertToBladeFilePath = (dotNotationPath?: string): string | undefined => {
   if (!dotNotationPath) { return; }
   const relativePath = dotNotationPath?.replace(/\./g, '/');
-  const workspaceRoot = process.cwd(); // プロジェクトのルートパス
+  const workspaceRoot = process.cwd(); // Project root path
   const absoluteViewPath = `file://${workspaceRoot}/resources/views`;
   return `${absoluteViewPath}/${relativePath}.blade.php`;
 };
 
 /**
- * ASTNodeを、VariableInfoという独自型に変換。
+ * Convert ASTNode to custom VariableInfo type.
  */
 const extractVariablesFromArray = (node: ArrayNode, depth = 0): VarNameSourceJumpTos[] | undefined => {
   if (!node.items || depth > 5) { return; }
