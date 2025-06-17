@@ -4,8 +4,9 @@
   "description": "Variable completion and hover information for Laravel Blade templates based on Controller variables",
   "version": "0.0.3",
   "publisher": "mrksye",
+  "license": "MIT",
   "author": {
-    "name": "Yusuke Nakamura"
+    "name": "Mrksye"
   },
   "repository": {
     "type": "git",
