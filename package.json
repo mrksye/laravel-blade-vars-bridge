@@ -26,7 +26,9 @@
     "blade",
     "php",
     "autocomplete",
+    "variable",
     "variables",
+    "bridge",
     "controller",
     "type",
     "hint",
@@ -37,7 +39,8 @@
     "blade autocomplete",
     "laravel intellisense",
     "laravel vscode",
-    "laravel extension"
+    "laravel extension",
+    "laravel blade vars bridge"
   ],
   "engines": {
     "vscode": "^1.98.0"
