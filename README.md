@@ -1,28 +1,34 @@
-# Laravel Var Hint
+**日本語のREADMEは [README.ja.md](README.ja.md) をご覧ください。**
 
-Laravel Var Hint は、VSCode で Laravel の Controller から渡された変数を入力保管できる拡張機能です。
+# Laravel Var Bridge
 
-※型情報は取得していないため、プロパティ情報などは予測変換されません。
+Laravel Var Bridge is a VSCode extension that provides variable completion for Laravel Blade templates based on variables passed from Controllers.
 
+**Note**: Type information is not retrieved, so property information and other type-specific completions are not available.
 
-## 特徴
-- Blade テンプレート内で、Controller から渡された変数を補完します。
-- 型情報は取得できません。
-- 変数にホバーすると、Controller へのリンクが表示されます。
+## Features
 
+- Auto-completion for variables passed from Controllers in Blade templates
+- Hover information showing the Controller source location
+- Jump to Controller definition from Blade variables
 
-## インストール
+## Installation
 
+### From VSIX Package
 ```sh
-code --install-extension laravel-blade-var-hint-0.0.1.vsix
+code --install-extension laravel-blade-var-bridge-0.0.2.vsix
 ```
 
-## 設定
-特別な設定は不要です。
+### From VS Code Marketplace
+Search for "Laravel Var Bridge" in the VS Code Extensions marketplace.
 
+## Configuration
 
-## 使い方
-1. Laravel の Controller でビューへ変数を渡します。
+No special configuration is required. The extension works out of the box.
+
+## Usage
+
+1. Pass variables from your Laravel Controller to a view:
     ```php
     class SampleController extends Controller
     {
@@ -32,13 +38,14 @@ code --install-extension laravel-blade-var-hint-0.0.1.vsix
         }
     }
     ```
-2. Blade テンプレート内で `{{ $ }}` を入力すると、`$message` が補完候補が表示されます。
-3. `$message` にホバーすると、定義元の Controller へのリンクが表示されます。
 
+2. In your Blade template, start typing `{{ $ }}` and you'll see `$message` in the completion suggestions.
 
-## 動作条件
+3. Hover over `$message` to see a link to the Controller where it was defined.
 
-以下のような受け渡し形式に対応しています。
+## Supported Patterns
+
+The extension supports the following variable passing patterns:
 
 ```php
 return view('someview', [
@@ -58,11 +65,47 @@ return view('someview', array(
 ));
 ```
 
-　`with()`, `compact()` `変数に代入された配列` での受け渡しには対応しておりません。
+**Currently not supported:**
+- `with()` method calls
+- `compact()` function
+- Variables assigned to arrays before passing to view
 
+## Requirements
 
+- Visual Studio Code ^1.98.0
+- Laravel project with standard Controller structure
 
-## ライセンス
+## Extension Settings
 
-未記載
+This extension contributes the following settings:
+
+* `laravel-blade-variable-helper.enable`: Enable/disable the Laravel Blade Variable Helper
+* `laravel-blade-variable-helper.controllerPaths`: Paths to search for Laravel controllers (default: `["app/Http/Controllers/**/*.php"]`)
+
+## Known Issues
+
+- Type information is not available for variables
+- Complex variable passing patterns are not supported
+- Requires standard Laravel project structure
+
+## Release Notes
+
+### 0.0.2
+- Updated extension name to Laravel Var Bridge
+- Improved variable detection
+
+### 0.0.1
+- Initial release
+- Basic variable completion for Blade templates
+- Hover information for Controller links
+
+## Contributing
+
+Contributions are welcome! Please feel free to submit a Pull Request.
+
+## License
+
+TBD
+
+---
 
