@@ -1,8 +1,6 @@
-**日本語のREADMEは [README.ja.md](README.ja.md) をご覧ください。**
+# Laravel Blade Vars Bridge
 
-# Laravel Vars Bridge
-
-Laravel Vars Bridge is a VSCode extension that provides variable completion for Laravel Blade templates based on variables passed from Controllers.
+Laravel Blade Vars Bridge is a VSCode extension that provides variable completion for Laravel Blade templates based on variables passed from Controllers.
 
 **Note**: Type information is not retrieved, so property information and other type-specific completions are not available.
 
@@ -27,6 +25,7 @@ No special configuration is required. The extension works out of the box.
 ## Usage
 
 1. Pass variables from your Laravel Controller to a view:
+
     ```php
     class SampleController extends Controller
     {
