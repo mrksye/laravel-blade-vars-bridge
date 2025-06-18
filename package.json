@@ -97,7 +97,7 @@
   },
   "devDependencies": {
     "@types/mocha": "^10.0.10",
-    "@types/node": "20.x",
+    "@types/node": "^20.19.1",
     "@types/vscode": "^1.98.0",
     "@typescript-eslint/eslint-plugin": "^8.22.0",
     "@typescript-eslint/parser": "^8.22.0",
@@ -108,9 +108,6 @@
   },
   "dependencies": {
     "@rightcapital/phpdoc-parser": "^0.4.118",
-    "php-parser": "^3.2.2",
-    "vscode-languageclient": "^9.0.1",
-    "vscode-languageserver": "^9.0.1",
-    "vscode-languageserver-textdocument": "^1.0.12"
+    "php-wasm": "^0.0.8"
   }
 }
