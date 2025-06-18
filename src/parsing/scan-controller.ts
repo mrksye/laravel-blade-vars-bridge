@@ -1,12 +1,16 @@
 import * as vscode from 'vscode';
 import * as fs from 'fs';
-import { PhpWasm } from 'php-wasm';
 
 /**
  * Scan all controllers using VSCode API.
  */
 export const listControllerFiles = async (controllersPath: string): Promise<vscode.Uri[]> => {
-  const controllerPattern = `${controllersPath}/**/*.php`;
+  // Remove workspace root from pattern if it exists
+  const cleanPath = controllersPath.startsWith(vscode.workspace.rootPath || '') 
+    ? controllersPath.substring((vscode.workspace.rootPath || '').length + 1)
+    : controllersPath;
+    
+  const controllerPattern = cleanPath;
   const excludePattern = `{**/vendor/**,**/node_modules/**,**/tests/**,**/migrations/**}`;
   
   const controllerFiles = await vscode.workspace.findFiles(
@@ -18,54 +22,65 @@ export const listControllerFiles = async (controllersPath: string): Promise<vsco
 };
 
 /**
- * Parse controller code and extract variables passed to views using php-wasm
+ * Parse controller code and extract variables passed to views using regex
  */
-export const parseViewVariablesFromController = async (phpWasm: PhpWasm, controllerPath: string): Promise<BladeVarInfo[]> => {
-  const rawCode = fs.readFileSync(controllerPath, 'utf-8');
-  
-  // Use php-wasm to parse PHP code and extract view calls
-  const phpScript = `
-<?php
-// Simple parser to extract view calls and their variables
-$code = ${JSON.stringify(rawCode)};
-$pattern = '/view\\s*\\(\\s*[\'"]([^\'"]+)[\'"]\\s*,\\s*\\[([^\\]]+)\\]\\s*\\)/';
-preg_match_all($pattern, $code, $matches, PREG_SET_ORDER);
-
-$result = [];
-foreach ($matches as $match) {
-    $viewName = $match[1];
-    $varsString = $match[2];
-    
-    // Extract variable names from the array
-    $varPattern = '/[\'"]([^\'"]+)[\'"]\\s*=>\\s*\\$([a-zA-Z_][a-zA-Z0-9_]*)/';
-    preg_match_all($varPattern, $varsString, $varMatches, PREG_SET_ORDER);
-    
-    foreach ($varMatches as $varMatch) {
-        $result[] = [
-            'viewName' => $viewName,
-            'varName' => '$' . $varMatch[1],
-            'sourceVar' => '$' . $varMatch[2]
-        ];
-    }
-}
-
-echo json_encode($result);
-?>`;
-
+export const parseViewVariablesFromController = async (controllerPath: string): Promise<BladeVarInfo[]> => {
   try {
-    const result = await phpWasm.run(phpScript);
-    const viewCalls = JSON.parse(result.text);
-    
-    const bladeVarInfo: BladeVarInfo[] = viewCalls.map((call: any) => ({
-      name: call.varName,
-      source: call.sourceVar,
-      jumpTargetUri: convertToBladeFilePath(call.viewName),
-      definedInPath: controllerPath,
-      type: 'mixed', // Will be enhanced with proper type inference later
-    })).filter((info: BladeVarInfo) => info.jumpTargetUri);
+    const rawCode = fs.readFileSync(controllerPath, 'utf-8');
+    const bladeVarInfo: BladeVarInfo[] = [];
 
-    console.debug(`[DEBUG] processing scan: ${controllerPath}`);
-    return bladeVarInfo;
+    // Pattern to match view() calls with arrays: view('name', [...])
+    const viewPattern = /view\s*\(\s*['"]([^'"]+)['"]\s*,\s*\[([^\]]+)\]\s*\)/g;
+    let viewMatch;
+
+    while ((viewMatch = viewPattern.exec(rawCode)) !== null) {
+      const viewName = viewMatch[1];
+      const varsString = viewMatch[2];
+
+      // Extract variable assignments from the array
+      // Matches patterns like: 'key' => $value, "key" => $value
+      const varPattern = /['"]([^'"]+)['"]\s*=>\s*\$([a-zA-Z_][a-zA-Z0-9_]*)/g;
+      let varMatch;
+
+      while ((varMatch = varPattern.exec(varsString)) !== null) {
+        const varName = '$' + varMatch[1];
+        const sourceVar = '$' + varMatch[2];
+
+        bladeVarInfo.push({
+          name: varName,
+          source: sourceVar,
+          jumpTargetUri: convertToBladeFilePath(viewName) || '',
+          definedInPath: controllerPath,
+          type: 'mixed'
+        });
+      }
+    }
+
+    // Also look for compact() usage: view('name', compact('var1', 'var2'))
+    const compactPattern = /view\s*\(\s*['"]([^'"]+)['"]\s*,\s*compact\s*\(\s*([^)]+)\s*\)\s*\)/g;
+    let compactMatch;
+
+    while ((compactMatch = compactPattern.exec(rawCode)) !== null) {
+      const viewName = compactMatch[1];
+      const compactVars = compactMatch[2];
+
+      // Extract variable names from compact()
+      const varNames = compactVars.split(',').map(v => v.trim().replace(/['"]/g, ''));
+      
+      for (const varName of varNames) {
+        if (varName) {
+          bladeVarInfo.push({
+            name: '$' + varName,
+            source: '$' + varName,
+            jumpTargetUri: convertToBladeFilePath(viewName) || '',
+            definedInPath: controllerPath,
+            type: 'mixed'
+          });
+        }
+      }
+    }
+
+    return bladeVarInfo.filter(info => info.jumpTargetUri);
   } catch (error) {
     console.error(`Error parsing ${controllerPath}:`, error);
     return [];

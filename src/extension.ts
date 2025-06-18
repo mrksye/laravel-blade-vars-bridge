@@ -1,9 +1,9 @@
 import * as vscode from 'vscode';
-import { PhpWasm } from 'php-wasm';
 import { BladeVarInfo, listControllerFiles, parseViewVariablesFromController } from './parsing/scan-controller';
 
-let phpWasm: PhpWasm;
+let phpWasm: any = null;
 let allBladeVarInfos: BladeVarInfo[] = [];
+let phpWasmReady = false;
 
 
 /**
@@ -11,23 +11,21 @@ let allBladeVarInfos: BladeVarInfo[] = [];
  * @param {vscode.ExtensionContext} context - Extension context
  */
 export async function activate(context: vscode.ExtensionContext) {
+	console.log('Laravel Blade Vars Bridge extension activating...');
 	const outputChannel = vscode.window.createOutputChannel('Laravel Blade Vars Bridge Debug Channel');
 	outputChannel.appendLine('Laravel Blade Vars Bridge extension has been activated!');
-  outputChannel.show();
+	outputChannel.show();
+	
+	// Show notification to confirm activation
+	vscode.window.showInformationMessage('Laravel Blade Vars Bridge extension activated!');
 
 	try {
 		// Test Node.js availability
 		outputChannel.appendLine(`Node.js version: ${process.version}`);
 		outputChannel.appendLine(`Platform: ${process.platform}`);
 		
-		// Initialize PHP-WASM
-		phpWasm = new PhpWasm();
-		await phpWasm.binary;
-		outputChannel.appendLine('PHP-WASM initialized successfully');
-		
-		// Test PHP execution
-		const testResult = await phpWasm.run('<?php echo "PHP is working!"; ?>');
-		outputChannel.appendLine(`PHP test result: ${testResult.text}`);
+		// Initialize PHP-WASM safely in background
+		initializePhpWasmSafely(outputChannel);
 
 		// Scan controllers and build variable information
 		await refreshVariableInformation(outputChannel);
@@ -101,7 +99,42 @@ export async function activate(context: vscode.ExtensionContext) {
 
 	} catch (error) {
 		console.error('Failed to activate extension:', error);
+		outputChannel.appendLine(`Extension activation error: ${error}`);
+		outputChannel.appendLine(`Error stack: ${error instanceof Error ? error.stack : 'No stack trace'}`);
 		vscode.window.showErrorMessage(`Laravel Blade Vars Bridge activation error: ${error}`);
+	}
+}
+
+/**
+ * Initialize PHP-WASM safely without blocking activation
+ */
+async function initializePhpWasmSafely(outputChannel: vscode.OutputChannel) {
+	try {
+		outputChannel.appendLine('Starting PHP-WASM initialization in background...');
+		
+		// Set a reasonable timeout
+		const initPromise = (async () => {
+			try {
+				// Skip PHP-WASM for now - focus on file scanning functionality
+				outputChannel.appendLine('PHP-WASM temporarily disabled - using file scanning mode');
+				throw new Error('PHP-WASM disabled for compatibility');
+			} catch (moduleError) {
+				throw new Error(`PHP-WASM module error: ${moduleError}`);
+			}
+		})();
+		
+		const timeoutPromise = new Promise((_, reject) => 
+			setTimeout(() => reject(new Error('PHP-WASM initialization timeout')), 15000)
+		);
+		
+		await Promise.race([initPromise, timeoutPromise]);
+		outputChannel.appendLine('PHP-WASM initialized successfully');
+		
+	} catch (error) {
+		outputChannel.appendLine(`PHP-WASM initialization failed: ${error}`);
+		outputChannel.appendLine('Extension will continue in basic mode');
+		phpWasm = null;
+		phpWasmReady = false;
 	}
 }
 
@@ -113,17 +146,23 @@ async function refreshVariableInformation(outputChannel: vscode.OutputChannel): 
 		const controllerPaths = vscode.workspace.getConfiguration('laravel-blade-vars-bridge').get('controllerPaths', ['app/Http/Controllers/**/*.php']);
 		allBladeVarInfos = [];
 
+		outputChannel.appendLine('Using regex-based PHP parsing...');
 		for (const controllerPath of controllerPaths) {
 			const controllerFiles = await listControllerFiles(controllerPath);
 			outputChannel.appendLine(`Found ${controllerFiles.length} controller files in ${controllerPath}`);
 
 			for (const filePath of controllerFiles) {
-				const bladeVarInfos = await parseViewVariablesFromController(phpWasm, filePath.fsPath);
-				allBladeVarInfos = [...allBladeVarInfos, ...bladeVarInfos];
+				try {
+					const bladeVarInfos = await parseViewVariablesFromController(filePath.fsPath);
+					allBladeVarInfos = [...allBladeVarInfos, ...bladeVarInfos];
+					outputChannel.appendLine(`Parsed ${bladeVarInfos.length} variables from ${filePath.fsPath}`);
+				} catch (parseError) {
+					outputChannel.appendLine(`Error parsing ${filePath.fsPath}: ${parseError}`);
+				}
 			}
 		}
 
-		outputChannel.appendLine(`Processed ${allBladeVarInfos.length} blade variables`);
+		outputChannel.appendLine(`Total processed: ${allBladeVarInfos.length} blade variables`);
 	} catch (error) {
 		outputChannel.appendLine(`Error refreshing variable information: ${error}`);
 		console.error('Error refreshing variable information:', error);
