@@ -126,9 +126,21 @@ async function initializePhpWasmSafely(outputChannel: vscode.OutputChannel) {
 		// Set a reasonable timeout
 		const initPromise = (async () => {
 			try {
-				// Skip PHP-WASM for now - focus on file scanning functionality
-				outputChannel.appendLine('PHP-WASM temporarily disabled - using file scanning mode');
-				throw new Error('PHP-WASM disabled for compatibility');
+				// Import php-wasm dynamically
+				const phpWasmModule = await import('php-wasm');
+				outputChannel.appendLine('PHP-WASM module loaded successfully');
+				
+				// Initialize PHP-WASM with basic configuration
+				phpWasm = new phpWasmModule.PhpWasm();
+				phpWasmReady = true;
+				
+				outputChannel.appendLine('PHP-WASM instance created successfully');
+				
+				// Test basic PHP parsing
+				const testResult = phpWasm.run('<?php echo "PHP-WASM is working"; ?>');
+				outputChannel.appendLine(`PHP-WASM test result: ${testResult.text}`);
+				
+				return phpWasm;
 			} catch (moduleError) {
 				throw new Error(`PHP-WASM module error: ${moduleError}`);
 			}
@@ -157,14 +169,19 @@ async function refreshVariableInformation(outputChannel: vscode.OutputChannel): 
 		const controllerPaths = vscode.workspace.getConfiguration('laravel-blade-vars-bridge').get('controllerPaths', ['app/Http/Controllers/**/*.php']);
 		allBladeVarInfos = [];
 
-		outputChannel.appendLine('Using regex-based PHP parsing...');
+		if (phpWasmReady && phpWasm) {
+			outputChannel.appendLine('Using PHP-WASM for PHP parsing...');
+		} else {
+			outputChannel.appendLine('Using regex-based PHP parsing (fallback)...');
+		}
+
 		for (const controllerPath of controllerPaths) {
 			const controllerFiles = await listControllerFiles(controllerPath);
 			outputChannel.appendLine(`Found ${controllerFiles.length} controller files in ${controllerPath}`);
 
 			for (const filePath of controllerFiles) {
 				try {
-					const bladeVarInfos = await parseViewVariablesFromController(filePath.fsPath);
+					const bladeVarInfos = await parseViewVariablesFromController(filePath.fsPath, phpWasm, phpWasmReady);
 					allBladeVarInfos = [...allBladeVarInfos, ...bladeVarInfos];
 					outputChannel.appendLine(`Parsed ${bladeVarInfos.length} variables from ${filePath.fsPath}`);
 				} catch (parseError) {

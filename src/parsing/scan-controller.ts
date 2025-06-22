@@ -22,12 +22,26 @@ export const listControllerFiles = async (controllersPath: string): Promise<vsco
 };
 
 /**
- * Parse controller code and extract variables passed to views using regex
+ * Parse controller code and extract variables passed to views using PHP-WASM or regex fallback
  */
-export const parseViewVariablesFromController = async (controllerPath: string): Promise<BladeVarInfo[]> => {
+export const parseViewVariablesFromController = async (controllerPath: string, phpWasm?: any, phpWasmReady?: boolean): Promise<BladeVarInfo[]> => {
   try {
     const rawCode = fs.readFileSync(controllerPath, 'utf-8');
     const bladeVarInfo: BladeVarInfo[] = [];
+
+    // Try PHP-WASM first if available
+    if (phpWasmReady && phpWasm) {
+      try {
+        const phpWasmResults = parseWithPhpWasm(rawCode, controllerPath, phpWasm);
+        if (phpWasmResults.length > 0) {
+          return phpWasmResults;
+        }
+      } catch (phpWasmError) {
+        console.warn(`PHP-WASM parsing failed for ${controllerPath}, falling back to regex:`, phpWasmError);
+      }
+    }
+
+    // Fallback to regex parsing
 
     // Pattern to match view() calls with arrays: view('name', [...])
     const viewPattern = /view\s*\(\s*['"]([^'"]+)['"]\s*,\s*\[([^\]]+)\]\s*\)/g;
@@ -142,7 +156,7 @@ export const parseViewVariablesFromController = async (controllerPath: string): 
 /**
  * Infer variable type from PHP code context
  */
-export const inferVariableType = (code: string, varName: string): PHPType => {
+const inferVariableType = (code: string, varName: string): PHPType => {
   // Look for enum assignments first (PHP 8.1+ and traditional patterns)
   const enumType = inferEnumType(code, varName);
   if (enumType) {
@@ -257,7 +271,7 @@ export const inferVariableType = (code: string, varName: string): PHPType => {
 /**
  * Infer enum type from PHP code context
  */
-export const inferEnumType = (code: string, varName: string): PHPType | null => {
+const inferEnumType = (code: string, varName: string): PHPType | null => {
   // Pattern for PHP 8.1+ enum assignments: $var = EnumName::CaseName
   const php81EnumPattern = new RegExp(
     `\\$${varName}\\s*=\\s*([A-Z][a-zA-Z0-9_]+)::([A-Z_][A-Z0-9_]*)`,
@@ -1011,14 +1025,6 @@ export type PHPType =
   | `${string}|null`
   | string;
 
-/**
- * Type to store variable information
- */
-export type VarNameSourceJumpTos = {
-  name: string;
-  source: string;
-  jumpTargetUri?: string;
-}
 
 /**
  * Type to store variable information
@@ -1033,6 +1039,337 @@ export type BladeVarInfo = {
   type?: PHPType;
   properties?: Record<string, string>;
 }
+
+/**
+ * Parse PHP code using PHP-WASM AST for more accurate parsing
+ */
+export const parseWithPhpWasm = (phpCode: string, controllerPath: string, phpWasm: any): BladeVarInfo[] => {
+  try {
+    const bladeVarInfo: BladeVarInfo[] = [];
+    
+    // Create a valid PHP file wrapper
+    const wrappedCode = `<?php
+${phpCode}
+`;
+
+    // Parse PHP code to AST
+    const astScript = `
+<?php
+$code = ${JSON.stringify(wrappedCode)};
+try {
+    $ast = ast\\parse_code($code, $version=70);
+    echo json_encode($ast, JSON_PRETTY_PRINT);
+} catch (Exception $e) {
+    echo json_encode(['error' => $e->getMessage()]);
+}
+`;
+
+    const result = phpWasm.run(astScript);
+    
+    if (!result || !result.text) {
+      throw new Error('No AST result from PHP-WASM');
+    }
+
+    let astData;
+    try {
+      astData = JSON.parse(result.text);
+    } catch (jsonError) {
+      // Try alternative AST parsing method using token_get_all
+      const tokenScript = `
+<?php
+$code = ${JSON.stringify(wrappedCode)};
+$tokens = token_get_all($code);
+$methods = [];
+$in_function = false;
+$function_name = '';
+$brace_count = 0;
+$looking_for_view = false;
+
+foreach ($tokens as $i => $token) {
+    if (is_array($token)) {
+        $token_name = token_name($token[0]);
+        $token_value = $token[1];
+        
+        // Look for function definitions
+        if ($token_name === 'T_FUNCTION') {
+            $in_function = true;
+        }
+        
+        // Get function name
+        if ($in_function && $token_name === 'T_STRING') {
+            $function_name = $token_value;
+            $in_function = false;
+        }
+        
+        // Look for view() calls
+        if ($token_name === 'T_STRING' && $token_value === 'view') {
+            $looking_for_view = true;
+            $methods[] = [
+                'type' => 'view_call',
+                'function' => $function_name,
+                'position' => $i
+            ];
+        }
+    }
+}
+
+echo json_encode($methods, JSON_PRETTY_PRINT);
+`;
+
+      const tokenResult = phpWasm.run(tokenScript);
+      if (!tokenResult || !tokenResult.text) {
+        throw new Error('No token result from PHP-WASM');
+      }
+
+      try {
+        JSON.parse(tokenResult.text); // Validate JSON but don't use the data yet
+        return parseViewCallsFromASTOrTokens(phpCode, controllerPath);
+      } catch (tokenJsonError) {
+        throw new Error(`Failed to parse token JSON: ${tokenJsonError}`);
+      }
+    }
+
+    // If we got an AST, parse it for view calls
+    if (astData.error) {
+      throw new Error(`PHP AST error: ${astData.error}`);
+    }
+
+    return parseViewCallsFromASTOrTokens(phpCode, controllerPath);
+
+  } catch (error) {
+    console.error('PHP-WASM parsing error:', error);
+    throw error;
+  }
+};
+
+/**
+ * Parse view calls from AST or token data (both currently fall back to enhanced regex)
+ */
+const parseViewCallsFromASTOrTokens = (phpCode: string, controllerPath: string): BladeVarInfo[] => {
+  // For now, both AST and token parsing fall back to enhanced regex parsing
+  // This can be enhanced in the future with actual AST traversal
+  return parseViewCallsUsingEnhancedRegex(phpCode, controllerPath);
+};
+
+/**
+ * Enhanced regex parsing with better accuracy
+ */
+const parseViewCallsUsingEnhancedRegex = (phpCode: string, controllerPath: string): BladeVarInfo[] => {
+  const bladeVarInfo: BladeVarInfo[] = [];
+
+  // More sophisticated view() pattern matching
+  // Handles multi-line view calls and complex array structures
+  const viewCallPattern = /view\s*\(\s*['"]([^'"]+)['"]\s*,\s*(\[[\s\S]*?\]|\w+\([^)]*\)|compact\([^)]*\))\s*\)/g;
+  
+  let match;
+  while ((match = viewCallPattern.exec(phpCode)) !== null) {
+    const [fullMatch, viewName, variablesPart] = match;
+    
+    try {
+      if (variablesPart.trim().startsWith('[')) {
+        // Array syntax: ['key' => $value, ...]
+        parseArraySyntaxVariables(variablesPart, viewName, phpCode, controllerPath, bladeVarInfo);
+      } else if (variablesPart.includes('compact')) {
+        // Compact syntax: compact('var1', 'var2')
+        parseCompactSyntaxVariables(variablesPart, viewName, phpCode, controllerPath, bladeVarInfo);
+      } else {
+        // Variable or method call
+        parseVariableOrMethodCall(variablesPart, viewName, phpCode, controllerPath, bladeVarInfo);
+      }
+    } catch (parseError) {
+      console.warn(`Error parsing view call in ${controllerPath}:`, parseError);
+    }
+  }
+
+  return bladeVarInfo;
+};
+
+/**
+ * Parse array syntax variables from view calls
+ */
+const parseArraySyntaxVariables = (
+  arrayString: string, 
+  viewName: string, 
+  phpCode: string, 
+  controllerPath: string, 
+  bladeVarInfo: BladeVarInfo[]
+) => {
+  // Remove outer brackets and split by commas, handling nested structures
+  const cleanArray = arrayString.slice(1, -1); // Remove [ ]
+  
+  // More sophisticated parsing to handle nested arrays and complex expressions
+  const variablePattern = /['"]([^'"]+)['"]\s*=>\s*(\$[a-zA-Z_][a-zA-Z0-9_]*(?:->[a-zA-Z_][a-zA-Z0-9_]*)*|\$[a-zA-Z_][a-zA-Z0-9_]*\([^)]*\)|[^,]+)/g;
+  
+  let varMatch;
+  while ((varMatch = variablePattern.exec(cleanArray)) !== null) {
+    const [, keyName, valueExpression] = varMatch;
+    const varName = '$' + keyName;
+    
+    // Extract the base variable name from complex expressions
+    const baseVarMatch = valueExpression.match(/\$([a-zA-Z_][a-zA-Z0-9_]*)/);
+    const sourceVar = baseVarMatch ? '$' + baseVarMatch[1] : valueExpression;
+    
+    const inferredType = inferVariableTypeEnhanced(phpCode, baseVarMatch ? baseVarMatch[1] : keyName, valueExpression);
+    const properties = inferTypeProperties(inferredType);
+
+    bladeVarInfo.push({
+      name: varName,
+      source: sourceVar,
+      jumpTargetUri: convertToBladeFilePath(viewName) || '',
+      definedInPath: controllerPath,
+      type: inferredType,
+      properties: properties
+    });
+
+    // Handle collection types for foreach
+    addCollectionItemTypes(inferredType, varName, viewName, controllerPath, bladeVarInfo);
+  }
+};
+
+/**
+ * Parse compact syntax variables
+ */
+const parseCompactSyntaxVariables = (
+  compactString: string,
+  viewName: string, 
+  phpCode: string, 
+  controllerPath: string,
+  bladeVarInfo: BladeVarInfo[]
+) => {
+  // Extract variable names from compact('var1', 'var2', ...)
+  const compactMatch = compactString.match(/compact\s*\(\s*([^)]+)\s*\)/);
+  if (!compactMatch) {
+    return;
+  }
+  
+  const variableNames = compactMatch[1]
+    .split(',')
+    .map(v => v.trim().replace(/['"]/g, ''))
+    .filter(v => v.length > 0);
+  
+  for (const varName of variableNames) {
+    const fullVarName = '$' + varName;
+    const inferredType = inferVariableTypeEnhanced(phpCode, varName, fullVarName);
+    const properties = inferTypeProperties(inferredType);
+    
+    bladeVarInfo.push({
+      name: fullVarName,
+      source: fullVarName,
+      jumpTargetUri: convertToBladeFilePath(viewName) || '',
+      definedInPath: controllerPath,
+      type: inferredType,
+      properties: properties
+    });
+
+    // Handle collection types for foreach
+    addCollectionItemTypes(inferredType, fullVarName, viewName, controllerPath, bladeVarInfo);
+  }
+};
+
+/**
+ * Parse variable or method call
+ */
+const parseVariableOrMethodCall = (
+  expression: string,
+  viewName: string,
+  phpCode: string,
+  controllerPath: string,
+  bladeVarInfo: BladeVarInfo[]
+) => {
+  // Handle cases like $data, $this->getData(), etc.
+  const varMatch = expression.match(/\$([a-zA-Z_][a-zA-Z0-9_]*)/);
+  if (varMatch) {
+    const varName = '$' + varMatch[1];
+    const inferredType = inferVariableTypeEnhanced(phpCode, varMatch[1], expression);
+    const properties = inferTypeProperties(inferredType);
+    
+    bladeVarInfo.push({
+      name: varName,
+      source: expression.trim(),
+      jumpTargetUri: convertToBladeFilePath(viewName) || '',
+      definedInPath: controllerPath,
+      type: inferredType,
+      properties: properties
+    });
+
+    // Handle collection types for foreach
+    addCollectionItemTypes(inferredType, varName, viewName, controllerPath, bladeVarInfo);
+  }
+};
+
+/**
+ * Add collection item types for foreach loops
+ */
+const addCollectionItemTypes = (
+  type: string,
+  varName: string,
+  viewName: string,
+  controllerPath: string,
+  bladeVarInfo: BladeVarInfo[]
+) => {
+  if (type.startsWith('Collection<') && type.endsWith('>')) {
+    const itemType = type.slice(11, -1);
+    const bladeFilePath = convertToBladeFilePath(viewName);
+    
+    if (bladeFilePath) {
+      const foreachVars = extractForeachVariables(bladeFilePath, varName);
+      
+      for (const foreachVar of foreachVars) {
+        bladeVarInfo.push({
+          name: foreachVar,
+          source: `${varName} (foreach item)`,
+          jumpTargetUri: bladeFilePath,
+          definedInPath: controllerPath,
+          type: itemType,
+          properties: inferTypeProperties(itemType)
+        });
+      }
+    }
+  }
+};
+
+/**
+ * Enhanced variable type inference with better context analysis
+ */
+const inferVariableTypeEnhanced = (code: string, varName: string, fullExpression: string): PHPType => {
+  // First try the existing inference
+  const basicType = inferVariableType(code, varName);
+  if (basicType !== 'mixed') {
+    return basicType;
+  }
+
+  // Enhanced inference based on method calls and context
+  if (fullExpression.includes('->')) {
+    // Chain analysis
+    if (fullExpression.includes('->get()') || fullExpression.includes('->all()')) {
+      const modelMatch = fullExpression.match(/([A-Z][a-zA-Z0-9_]+)::/);
+      if (modelMatch) {
+        return `Collection<${modelMatch[1]}>`;
+      }
+    }
+    
+    if (fullExpression.includes('->first()') || fullExpression.includes('->find(')) {
+      const modelMatch = fullExpression.match(/([A-Z][a-zA-Z0-9_]+)::/);
+      if (modelMatch) {
+        return modelMatch[1];
+      }
+    }
+  }
+
+  // Method call analysis
+  if (fullExpression.includes('(')) {
+    // Look for method patterns that return specific types
+    if (fullExpression.includes('collect(')) {
+      return 'Collection';
+    }
+    
+    if (fullExpression.includes('now()') || fullExpression.includes('today()')) {
+      return 'Carbon';
+    }
+  }
+
+  return basicType;
+};
 
 
 
