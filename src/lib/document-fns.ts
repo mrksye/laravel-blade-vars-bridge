@@ -1,27 +1,10 @@
-import { TextDocument, Range, Position } from "vscode-languageserver-textdocument";
+import * as vscode from 'vscode';
 
 /**
- * For now
+ * Get word range at position using VSCode API
  */
-const getWordRangeAtPosition = (doc: TextDocument, position: Position, regex: RegExp = /\$[\w]+/): Range|undefined => {
-  const text = doc.getText();
-  const offset = doc.offsetAt(position);
-  const lineStart = doc.offsetAt({ line: position.line, character: 0 });
-  const lineEnd = doc.offsetAt({ line: position.line + 1, character: 0 });
-  const lineText = text.slice(lineStart, lineEnd);
-
-  let match: RegExpExecArray | null;
-  while ((match = regex.exec(lineText))) {
-    const start = match.index;
-    const end = start + match[0].length;
-    if (start <= offset - lineStart && end >= offset - lineStart) {
-      return {
-        start: doc.positionAt(lineStart + start),
-        end: doc.positionAt(lineStart + end)
-      };
-    }
-  }
+const getWordRangeAtPosition = (doc: vscode.TextDocument, position: vscode.Position, regex: RegExp = /\$[\w]+/): vscode.Range | undefined => {
+  return doc.getWordRangeAtPosition(position, regex);
 };
-
 
 export { getWordRangeAtPosition };

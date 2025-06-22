@@ -1,241 +1,988 @@
-import fs from 'fs';
-import { sync as glob } from 'fast-glob';
-import { Engine, Expression, Location, Node } from 'php-parser';
+import * as vscode from 'vscode';
+import * as fs from 'fs';
 
 /**
- * Scan all controllers.
+ * Scan all controllers using VSCode API.
  */
-export const listControllerFiles = (controllersPath: string): string[] => {
-  const controllerPattern = `${controllersPath}/**/*.php`;
-  const globSearchOptions = {
-    deep: Infinity,
-    absolute: true,
-    followSymbolicLinks: true,
-    ignore: [
-      '**/vendor/**',
-      '**/node_modules/**',
-      '**/tests/**',
-      '**/migrations/**'
-    ],
-    caseSensitiveMatch: false,
-    onlyFiles: true,
-  };
-  const controllerFiles = glob(controllerPattern, { ...globSearchOptions, stats: true }).map<string>(entry => entry.path);
+export const listControllerFiles = async (controllersPath: string): Promise<vscode.Uri[]> => {
+  // Remove workspace root from pattern if it exists
+  const cleanPath = controllersPath.startsWith(vscode.workspace.rootPath || '') 
+    ? controllersPath.substring((vscode.workspace.rootPath || '').length + 1)
+    : controllersPath;
+    
+  const controllerPattern = cleanPath;
+  const excludePattern = `{**/vendor/**,**/node_modules/**,**/tests/**,**/migrations/**}`;
+  
+  const controllerFiles = await vscode.workspace.findFiles(
+    controllerPattern, 
+    excludePattern
+  );
+  
   return controllerFiles;
 };
 
-// /**
-//  * Parse controller code and extract variables passed to views
-//  */
-export const parseViewVariablesFromController = (parser: Engine, controllerPath: string): BladeVarInfo[] => {
-  const rawCode = fs.readFileSync(controllerPath, 'utf-8');
-  const ast = parser.parseCode(rawCode, controllerPath);
-  
-  let bladeVarInfo: BladeVarInfo[] = [];
-  traverseAST(ast, (node) => {
-    if (!node) { return; }
-
-    if (!isCallExpression(node)) { return; }
-
-    const callNode = node as CallExpression;
-
-    if (isViewCall(callNode)) {
-      const varNameSourceJumpTos = parseViewCall(callNode);
-      bladeVarInfo = varNameSourceJumpTos.map((v) => ({
-        name: v.name,
-        source: v.source,
-        jumpTargetUri: v.jumpTargetUri!,
-        definedInPath: controllerPath,
-        type: 'mixed', // Hard-coded, dangerous!!
-      }));
-    }
-  });
-
-  console.debug(`[DEBUG] processing scan: ${controllerPath}`);
-  return bladeVarInfo;
-};
-
-
-
-
-
-
-
-
-
-
-
 /**
- * 
- * Unconfirmed
+ * Parse controller code and extract variables passed to views using regex
  */
-type Argument = Expression;
+export const parseViewVariablesFromController = async (controllerPath: string): Promise<BladeVarInfo[]> => {
+  try {
+    const rawCode = fs.readFileSync(controllerPath, 'utf-8');
+    const bladeVarInfo: BladeVarInfo[] = [];
 
-/**
- * 
- * Unconfirmed
- */
-interface CallExpression extends Node {
-  kind: 'call';
-  what: Node;
-  arguments: Node[];
-}
+    // Pattern to match view() calls with arrays: view('name', [...])
+    const viewPattern = /view\s*\(\s*['"]([^'"]+)['"]\s*,\s*\[([^\]]+)\]\s*\)/g;
+    let viewMatch;
 
-/**
- * 
- * Unconfirmed
- */
-interface PropertyLookup extends Node {
-  kind: 'propertylookup';
-  what: Node;
-  offset: Node;
-}
+    while ((viewMatch = viewPattern.exec(rawCode)) !== null) {
+      const viewName = viewMatch[1];
+      const varsString = viewMatch[2];
 
-/**
- * Name Node.
- * Type definition confirmed
- */
-interface NameNode extends Node {
-  kind: 'name',
-  loc: Location,
-  name: string,
-  resolution: string,
-}
+      // Extract variable assignments from the array
+      // Matches patterns like: 'key' => $value, "key" => $value
+      const varPattern = /['"]([^'"]+)['"]\s*=>\s*\$([a-zA-Z_][a-zA-Z0-9_]*)/g;
+      let varMatch;
 
-/**
- * 
- * Unconfirmed
- */
-interface Identifier extends Node {
-  kind: 'identifier';
-  name: string;
-}
+      while ((varMatch = varPattern.exec(varsString)) !== null) {
+        const varName = '$' + varMatch[1];
+        const sourceVar = '$' + varMatch[2];
+        const inferredType = inferVariableType(rawCode, varMatch[2]);
+        const properties = inferTypeProperties(inferredType);
 
-/**
- * String Node.
- * Type definition confirmed
- */
-interface StringNode extends Node {
-  kind: 'string',
-  loc: Location,
-  value: string,
-  raw: any,
-  unicode: boolean,
-  isDoubleQuote: boolean,
-}
+        bladeVarInfo.push({
+          name: varName,
+          source: sourceVar,
+          jumpTargetUri: convertToBladeFilePath(viewName) || '',
+          definedInPath: controllerPath,
+          type: inferredType,
+          properties: properties
+        });
 
-/**
- * Variable Node.
- * Type definition confirmed
- */
-interface VariableNode extends Node {
-  kind: 'variable',
-  loc: Location,
-  name: string,
-  curly: boolean,
-}
-
-
-/**
- * 
- * Unconfirmed
- */
-interface ArrayNode extends Node {
-  kind: 'array';
-  items: Entry[];
-}
-
-/**
- * Array entry
- * Confirmed
- */
-interface Entry extends Node {
-  kind: 'entry',
-  loc: Location,
-  key: Node,
-  value: Node,
-  byRef: boolean,
-  unpack: boolean,
-}
-
-/**
- * Traverse AST
- */
-const traverseAST = (node: Node & Record<string, any>, callback: (node: Node | null) => void) => {
-  if (!node) { return; }
-  callback(node);
-
-  for (const key in node) {
-    if (node.hasOwnProperty(key)) {
-      const child = node[key];
-      if (Array.isArray(child)) {
-        child.forEach(n => traverseAST(n, callback));
-      } else if (typeof child === 'object' && child !== null) {
-        traverseAST(child, callback);
+        // If it's a collection type, add the individual item type for foreach loops
+        if (inferredType.startsWith('Collection<') && inferredType.endsWith('>')) {
+          const itemType = inferredType.slice(11, -1); // Extract Model from Collection<Model>
+          
+          // Parse Blade template to find actual foreach variable names
+          const bladeFilePath = convertToBladeFilePath(viewName);
+          if (bladeFilePath) {
+            const foreachVars = extractForeachVariables(bladeFilePath, varName);
+            
+            for (const foreachVar of foreachVars) {
+              bladeVarInfo.push({
+                name: foreachVar,
+                source: `${varName} (foreach item)`,
+                jumpTargetUri: bladeFilePath,
+                definedInPath: controllerPath,
+                type: itemType,
+                properties: inferTypeProperties(itemType)
+              });
+            }
+          }
+        }
       }
     }
+
+    // Also look for compact() usage: view('name', compact('var1', 'var2'))
+    const compactPattern = /view\s*\(\s*['"]([^'"]+)['"]\s*,\s*compact\s*\(\s*([^)]+)\s*\)\s*\)/g;
+    let compactMatch;
+
+    while ((compactMatch = compactPattern.exec(rawCode)) !== null) {
+      const viewName = compactMatch[1];
+      const compactVars = compactMatch[2];
+
+      // Extract variable names from compact()
+      const varNames = compactVars.split(',').map(v => v.trim().replace(/['"]/g, ''));
+      
+      for (const varName of varNames) {
+        if (varName) {
+          const inferredType = inferVariableType(rawCode, varName);
+          const properties = inferTypeProperties(inferredType);
+          const fullVarName = '$' + varName;
+          
+          bladeVarInfo.push({
+            name: fullVarName,
+            source: fullVarName,
+            jumpTargetUri: convertToBladeFilePath(viewName) || '',
+            definedInPath: controllerPath,
+            type: inferredType,
+            properties: properties
+          });
+
+          // If it's a collection type, add the individual item type for foreach loops
+          if (inferredType.startsWith('Collection<') && inferredType.endsWith('>')) {
+            const itemType = inferredType.slice(11, -1); // Extract Model from Collection<Model>
+            
+            // Parse Blade template to find actual foreach variable names
+            const bladeFilePath = convertToBladeFilePath(viewName);
+            if (bladeFilePath) {
+              const foreachVars = extractForeachVariables(bladeFilePath, fullVarName);
+              
+              for (const foreachVar of foreachVars) {
+                bladeVarInfo.push({
+                  name: foreachVar,
+                  source: `${fullVarName} (foreach item)`,
+                  jumpTargetUri: bladeFilePath,
+                  definedInPath: controllerPath,
+                  type: itemType,
+                  properties: inferTypeProperties(itemType)
+                });
+              }
+            }
+          }
+        }
+      }
+    }
+
+    return bladeVarInfo.filter(info => info.jumpTargetUri);
+  } catch (error) {
+    console.error(`Error parsing ${controllerPath}:`, error);
+    return [];
+  }
+};
+
+/**
+ * Infer variable type from PHP code context
+ */
+export const inferVariableType = (code: string, varName: string): PHPType => {
+  // Look for enum assignments first (PHP 8.1+ and traditional patterns)
+  const enumType = inferEnumType(code, varName);
+  if (enumType) {
+    return enumType;
+  }
+
+  // Look for complex Eloquent query patterns first
+  const eloquentQueryPattern = new RegExp(
+    `\\$${varName}\\s*=\\s*([A-Z][a-zA-Z0-9_]+)::query\\(\\)[\\s\\S]*?->get\\(\\);?`,
+    'g'
+  );
+  
+  const eloquentMatch = code.match(eloquentQueryPattern);
+  if (eloquentMatch) {
+    const modelName = eloquentMatch[0].match(/([A-Z][a-zA-Z0-9_]+)::query/)?.[1];
+    if (modelName) {
+      return `Collection<${modelName}>`;
+    }
+  }
+
+  // Look for variable assignment patterns
+  const patterns = [
+    // Model::find(), Model::where(), etc. (single model)
+    new RegExp(`\\$${varName}\\s*=\\s*([A-Z][a-zA-Z0-9_]+)::(find|first|create|make)\\s*\\(`, 'g'),
+    // Model::get(), Model::all() (collection)
+    new RegExp(`\\$${varName}\\s*=\\s*([A-Z][a-zA-Z0-9_]+)::(get|all|where)[\\s\\S]*?->get\\(\\)`, 'g'),
+    // Direct Model::where()->get() pattern
+    new RegExp(`\\$${varName}\\s*=\\s*([A-Z][a-zA-Z0-9_]+)::where[\\s\\S]*?get\\(\\)`, 'g'),
+    // new ClassName()
+    new RegExp(`\\$${varName}\\s*=\\s*new\\s+([A-Z][a-zA-Z0-9_\\\\]+)\\s*\\(`, 'g'),
+    // Collection methods
+    new RegExp(`\\$${varName}\\s*=\\s*collect\\s*\\(`, 'g'),
+    // Carbon dates
+    new RegExp(`\\$${varName}\\s*=\\s*(Carbon::|now\\(|today\\(|\\\\Carbon\\\\Carbon::)`, 'g'),
+    // Arrays
+    new RegExp(`\\$${varName}\\s*=\\s*\\[`, 'g'),
+    // Strings
+    new RegExp(`\\$${varName}\\s*=\\s*['"]`, 'g'),
+    // Numbers
+    new RegExp(`\\$${varName}\\s*=\\s*\\d+`, 'g'),
+    // Boolean
+    new RegExp(`\\$${varName}\\s*=\\s*(true|false)`, 'g'),
+    // Request
+    new RegExp(`\\$${varName}\\s*=\\s*\\$request`, 'g'),
+  ];
+
+  // Check for single model patterns (find, first, etc.)
+  const singleModelMatch = code.match(patterns[0]);
+  if (singleModelMatch) {
+    const modelName = singleModelMatch[0].match(/([A-Z][a-zA-Z0-9_]+)::/)?.[1];
+    if (modelName) {
+      return modelName;
+    }
+  }
+
+  // Check for collection patterns (get, all, where->get)
+  const collectionModelMatch = code.match(patterns[1]) || code.match(patterns[2]);
+  if (collectionModelMatch) {
+    const modelName = collectionModelMatch[0].match(/([A-Z][a-zA-Z0-9_]+)::/)?.[1];
+    if (modelName) {
+      return `Collection<${modelName}>`;
+    }
+  }
+
+  // Check for new instance patterns
+  const newMatch = code.match(patterns[3]);
+  if (newMatch) {
+    const className = newMatch[0].match(/new\s+([A-Z][a-zA-Z0-9_\\]+)/)?.[1];
+    if (className) {
+      return className.replace(/\\/g, '');
+    }
+  }
+
+  // Check for collection
+  if (patterns[4].test(code)) {
+    return 'Collection';
+  }
+
+  // Check for Carbon
+  if (patterns[5].test(code)) {
+    return 'Carbon';
+  }
+
+  // Check for array
+  if (patterns[6].test(code)) {
+    return 'array';
+  }
+
+  // Check for string
+  if (patterns[7].test(code)) {
+    return 'string';
+  }
+
+  // Check for number
+  if (patterns[8].test(code)) {
+    return 'int';
+  }
+
+  // Check for boolean
+  if (patterns[9].test(code)) {
+    return 'bool';
+  }
+
+  // Check for request
+  if (patterns[10].test(code)) {
+    return 'Request';
+  }
+
+  return 'mixed';
+};
+
+/**
+ * Infer enum type from PHP code context
+ */
+export const inferEnumType = (code: string, varName: string): PHPType | null => {
+  // Pattern for PHP 8.1+ enum assignments: $var = EnumName::CaseName
+  const php81EnumPattern = new RegExp(
+    `\\$${varName}\\s*=\\s*([A-Z][a-zA-Z0-9_]+)::([A-Z_][A-Z0-9_]*)`,
+    'g'
+  );
+  
+  const php81Match = code.match(php81EnumPattern);
+  if (php81Match) {
+    const enumName = php81Match[0].match(/([A-Z][a-zA-Z0-9_]+)::/)?.[1];
+    if (enumName && isValidEnumClass(enumName)) {
+      return enumName;
+    }
+  }
+
+  // Pattern for traditional enum assignments: $var = ClassName::CONSTANT
+  const traditionalEnumPattern = new RegExp(
+    `\\$${varName}\\s*=\\s*([A-Z][a-zA-Z0-9_]+)::([A-Z_][A-Z0-9_]*)`,
+    'g'
+  );
+  
+  const traditionalMatch = code.match(traditionalEnumPattern);
+  if (traditionalMatch) {
+    const className = traditionalMatch[0].match(/([A-Z][a-zA-Z0-9_]+)::/)?.[1];
+    if (className && isTraditionalEnumClass(className)) {
+      return className;
+    }
+  }
+
+  // Pattern for enum method calls: $var = EnumName::from('value') or EnumName::tryFrom('value')
+  const enumMethodPattern = new RegExp(
+    `\\$${varName}\\s*=\\s*([A-Z][a-zA-Z0-9_]+)::(from|tryFrom)\\s*\\(`,
+    'g'
+  );
+  
+  const enumMethodMatch = code.match(enumMethodPattern);
+  if (enumMethodMatch) {
+    const enumName = enumMethodMatch[0].match(/([A-Z][a-zA-Z0-9_]+)::/)?.[1];
+    if (enumName && isValidEnumClass(enumName)) {
+      return enumName;
+    }
+  }
+
+  return null;
+};
+
+/**
+ * Check if a class name represents a valid PHP 8.1+ enum
+ */
+export const isValidEnumClass = (className: string): boolean => {
+  try {
+    const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri?.fsPath;
+    if (!workspaceRoot) {
+      return false;
+    }
+
+    // Common enum paths in Laravel
+    const enumPaths = [
+      `${workspaceRoot}/app/Enums/${className}.php`,
+      `${workspaceRoot}/app/Models/Enums/${className}.php`,
+      `${workspaceRoot}/app/${className}.php`
+    ];
+
+    for (const enumPath of enumPaths) {
+      if (fs.existsSync(enumPath)) {
+        const enumContent = fs.readFileSync(enumPath, 'utf-8');
+        // Check if file contains enum declaration
+        if (/enum\s+[A-Z][a-zA-Z0-9_]*/.test(enumContent)) {
+          return true;
+        }
+      }
+    }
+
+    return false;
+  } catch (error) {
+    return false;
+  }
+};
+
+/**
+ * Check if a class name represents a traditional enum (class with constants)
+ */
+export const isTraditionalEnumClass = (className: string): boolean => {
+  try {
+    const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri?.fsPath;
+    if (!workspaceRoot) {
+      return false;
+    }
+
+    // Common class paths in Laravel
+    const classPaths = [
+      `${workspaceRoot}/app/Enums/${className}.php`,
+      `${workspaceRoot}/app/Models/Enums/${className}.php`,
+      `${workspaceRoot}/app/${className}.php`,
+      `${workspaceRoot}/app/Models/${className}.php`
+    ];
+
+    for (const classPath of classPaths) {
+      if (fs.existsSync(classPath)) {
+        const classContent = fs.readFileSync(classPath, 'utf-8');
+        // Check if file contains multiple constants (suggesting enum-like usage)
+        const constantMatches = classContent.match(/const\s+[A-Z_][A-Z0-9_]*\s*=\s*['"][^'"]*['"]/g);
+        if (constantMatches && constantMatches.length >= 2) {
+          return true;
+        }
+      }
+    }
+
+    return false;
+  } catch (error) {
+    return false;
+  }
+};
+
+/**
+ * Parse enum properties from PHP 8.1+ enum or traditional enum class
+ */
+export const parseEnumProperties = (enumName: string): Record<string, string> => {
+  try {
+    const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri?.fsPath;
+    if (!workspaceRoot) {
+      return {};
+    }
+
+    const enumPaths = [
+      `${workspaceRoot}/app/Enums/${enumName}.php`,
+      `${workspaceRoot}/app/Models/Enums/${enumName}.php`,
+      `${workspaceRoot}/app/${enumName}.php`
+    ];
+
+    let enumContent = '';
+    for (const enumPath of enumPaths) {
+      if (fs.existsSync(enumPath)) {
+        enumContent = fs.readFileSync(enumPath, 'utf-8');
+        break;
+      }
+    }
+
+    if (!enumContent) {
+      return {};
+    }
+
+    const properties: Record<string, string> = {};
+
+    // Parse PHP 8.1+ enum cases
+    if (/enum\s+[A-Z][a-zA-Z0-9_]*/.test(enumContent)) {
+      // Extract enum cases: case CASE_NAME = 'value';
+      const caseMatches = enumContent.matchAll(/case\s+([A-Z_][A-Z0-9_]*)\s*(?:=\s*['"]([^'"]*)['"]\s*)?;/g);
+      for (const match of caseMatches) {
+        const [, caseName, caseValue] = match;
+        properties[caseName] = enumName; // The case returns the enum instance
+      }
+
+      // Add standard PHP 8.1+ enum methods
+      properties['name'] = 'string';
+      properties['value'] = 'mixed';
+      properties['cases'] = `array<${enumName}>`;
+      properties['from'] = enumName;
+      properties['tryFrom'] = `${enumName}|null`;
+      
+      // Parse custom methods from enum file
+      const customMethods = parseEnumMethods(enumContent);
+      Object.assign(properties, customMethods);
+    } else {
+      // Parse traditional enum constants
+      const constantMatches = enumContent.matchAll(/const\s+([A-Z_][A-Z0-9_]*)\s*=\s*['"]([^'"]*)['"]/g);
+      for (const match of constantMatches) {
+        const [, constantName, constantValue] = match;
+        properties[constantName] = 'string'; // Traditional constants are usually strings
+      }
+      
+      // Parse custom methods from traditional enum class
+      const customMethods = parseEnumMethods(enumContent);
+      Object.assign(properties, customMethods);
+    }
+
+    return properties;
+  } catch (error) {
+    console.error(`Error parsing enum ${enumName}:`, error);
+    return {};
+  }
+};
+
+/**
+ * Parse methods from enum content and return their return types
+ */
+export const parseEnumMethods = (enumContent: string): Record<string, string> => {
+  const methods: Record<string, string> = {};
+  
+  // Pattern to match public methods with return types
+  // Matches: public function methodName(): string { ... }
+  const methodWithReturnTypePattern = /public\s+function\s+(\w+)\s*\([^)]*\)\s*:\s*(\w+)\s*\{/g;
+  let match;
+  
+  while ((match = methodWithReturnTypePattern.exec(enumContent)) !== null) {
+    const [, methodName, returnType] = match;
+    
+    // Map PHP types to our types
+    let mappedType = returnType;
+    switch (returnType.toLowerCase()) {
+      case 'string':
+        mappedType = 'string';
+        break;
+      case 'int':
+      case 'integer':
+        mappedType = 'int';
+        break;
+      case 'bool':
+      case 'boolean':
+        mappedType = 'bool';
+        break;
+      case 'array':
+        mappedType = 'array';
+        break;
+      case 'self':
+      case 'static':
+        // For enum methods returning self, we need the enum name
+        const enumNameMatch = enumContent.match(/enum\s+([A-Z][a-zA-Z0-9_]*)/);
+        if (enumNameMatch) {
+          mappedType = enumNameMatch[1];
+        } else {
+          mappedType = 'mixed';
+        }
+        break;
+      default:
+        // Keep the original type for custom classes
+        mappedType = returnType;
+    }
+    
+    methods[methodName] = mappedType;
+  }
+  
+  // Pattern to match methods without explicit return types
+  // Try to infer from return statements
+  const methodWithoutReturnTypePattern = /public\s+function\s+(\w+)\s*\([^)]*\)\s*\{([^}]+)\}/g;
+  
+  while ((match = methodWithoutReturnTypePattern.exec(enumContent)) !== null) {
+    const [, methodName, methodBody] = match;
+    
+    // Skip if we already have this method with explicit return type
+    if (methods[methodName]) {
+      continue;
+    }
+    
+    // Try to infer return type from return statements
+    let inferredType = 'mixed';
+    
+    if (/return\s+['"][^'"]*['"]/.test(methodBody)) {
+      inferredType = 'string';
+    } else if (/return\s+\d+/.test(methodBody)) {
+      inferredType = 'int';
+    } else if (/return\s+(true|false)/.test(methodBody)) {
+      inferredType = 'bool';
+    } else if (/return\s+\[/.test(methodBody)) {
+      inferredType = 'array';
+    } else if (/return\s+\$this/.test(methodBody)) {
+      const enumNameMatch = enumContent.match(/enum\s+([A-Z][a-zA-Z0-9_]*)/);
+      if (enumNameMatch) {
+        inferredType = enumNameMatch[1];
+      }
+    }
+    
+    methods[methodName] = inferredType;
+  }
+  
+  return methods;
+};
+
+/**
+ * Extract foreach variable names from Blade template
+ */
+export const extractForeachVariables = (bladeFilePath: string, collectionVar: string): string[] => {
+  try {
+    // Convert file:// URI to actual file path
+    const filePath = bladeFilePath.replace('file://', '');
+    
+    // Check if file exists before reading
+    if (!require('fs').existsSync(filePath)) {
+      return [];
+    }
+    
+    const bladeContent = require('fs').readFileSync(filePath, 'utf-8');
+    const foreachVars: string[] = [];
+    
+    // Pattern to match @foreach ($collection as $item) or @forelse ($collection as $item)
+    const foreachPattern = new RegExp(
+      `@fore(?:ach|lse)\\s*\\(\\s*\\${collectionVar.slice(1)}\\s+as\\s+\\$(\\w+)\\s*\\)`,
+      'g'
+    );
+    
+    let match;
+    while ((match = foreachPattern.exec(bladeContent)) !== null) {
+      const itemVar = '$' + match[1];
+      if (!foreachVars.includes(itemVar)) {
+        foreachVars.push(itemVar);
+      }
+    }
+    
+    return foreachVars;
+  } catch (error) {
+    console.error(`Error reading Blade file ${bladeFilePath}:`, error);
+    return [];
+  }
+};
+
+/**
+ * Parse relation methods from Model content
+ */
+const parseRelationMethods = (modelContent: string): Record<string, string> => {
+  const relations: Record<string, string> = {};
+  
+  // Pattern to match relation methods
+  const relationPatterns = [
+    // hasOne, belongsTo (single model)
+    /public\s+function\s+(\w+)\s*\([^)]*\)\s*(?::\s*\w+)?\s*\{[^}]*return\s+\$this->(hasOne|belongsTo)\s*\(/g,
+    // hasMany, belongsToMany (collection)
+    /public\s+function\s+(\w+)\s*\([^)]*\)\s*(?::\s*\w+)?\s*\{[^}]*return\s+\$this->(hasMany|belongsToMany)\s*\(/g,
+    // morphTo, morphOne, morphMany
+    /public\s+function\s+(\w+)\s*\([^)]*\)\s*(?::\s*\w+)?\s*\{[^}]*return\s+\$this->(morphTo|morphOne|morphMany)\s*\(/g
+  ];
+
+  for (const pattern of relationPatterns) {
+    let match;
+    while ((match = pattern.exec(modelContent)) !== null) {
+      const [, methodName, relationType] = match;
+      
+      // Map relation types to return types
+      switch (relationType) {
+        case 'hasOne':
+        case 'belongsTo':
+        case 'morphTo':
+        case 'morphOne':
+          // Try to extract the related model from the relation call
+          const singleModelMatch = match[0].match(/\$this->\w+\s*\(\s*([A-Z]\w+)::class/);
+          if (singleModelMatch) {
+            relations[methodName] = singleModelMatch[1];
+          } else {
+            relations[methodName] = 'Model'; // Fallback to generic model
+          }
+          break;
+          
+        case 'hasMany':
+        case 'belongsToMany':
+        case 'morphMany':
+          // Try to extract the related model for collections
+          const collectionModelMatch = match[0].match(/\$this->\w+\s*\(\s*([A-Z]\w+)::class/);
+          if (collectionModelMatch) {
+            relations[methodName] = `Collection<${collectionModelMatch[1]}>`;
+          } else {
+            relations[methodName] = 'Collection'; // Fallback to generic collection
+          }
+          break;
+      }
+    }
+  }
+
+  return relations;
+};
+
+/**
+ * Parse Model file to extract properties
+ */
+export const parseModelProperties = (modelName: string): Record<string, string> => {
+  try {
+    const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri?.fsPath;
+    if (!workspaceRoot) {
+      return {};
+    }
+
+    // Common model paths in Laravel
+    const modelPaths = [
+      `${workspaceRoot}/app/Models/${modelName}.php`,
+      `${workspaceRoot}/app/${modelName}.php`
+    ];
+
+    let modelContent = '';
+    for (const modelPath of modelPaths) {
+      if (fs.existsSync(modelPath)) {
+        modelContent = fs.readFileSync(modelPath, 'utf-8');
+        break;
+      }
+    }
+
+    if (!modelContent) {
+      return {};
+    }
+
+    const properties: Record<string, string> = {};
+
+    // Parse $fillable array
+    const fillableMatch = modelContent.match(/protected\s+\$fillable\s*=\s*\[([\s\S]*?)\]/);
+    if (fillableMatch) {
+      const fillableContent = fillableMatch[1];
+      const fillableItems = fillableContent.match(/'([^']+)'/g) || [];
+      fillableItems.forEach(item => {
+        const fieldName = item.replace(/'/g, '');
+        properties[fieldName] = 'string'; // Default to string
+      });
+    }
+
+    // Parse $casts array for more specific types
+    const castsMatch = modelContent.match(/protected\s+\$casts\s*=\s*\[([\s\S]*?)\]/);
+    if (castsMatch) {
+      const castsContent = castsMatch[1];
+      const castLines = castsContent.split(',');
+      
+      for (const line of castLines) {
+        const castMatch = line.match(/'([^']+)'\s*=>\s*'([^']+)'/);
+        if (castMatch) {
+          const [, fieldName, castType] = castMatch;
+          
+          // Map Laravel cast types to our types
+          switch (castType) {
+            case 'datetime':
+            case 'date':
+            case 'timestamp':
+              properties[fieldName] = 'Carbon';
+              break;
+            case 'integer':
+            case 'int':
+              properties[fieldName] = 'int';
+              break;
+            case 'boolean':
+            case 'bool':
+              properties[fieldName] = 'bool';
+              break;
+            case 'float':
+            case 'double':
+            case 'decimal':
+              properties[fieldName] = 'float';
+              break;
+            case 'array':
+            case 'json':
+              properties[fieldName] = 'array';
+              break;
+            default:
+              // Check if cast type is a custom enum class
+              if (/^[A-Z][a-zA-Z0-9_\\]*$/.test(castType)) {
+                const enumClassName = castType.split('\\').pop() || castType;
+                if (isValidEnumClass(enumClassName) || isTraditionalEnumClass(enumClassName)) {
+                  properties[fieldName] = enumClassName;
+                  break;
+                }
+              }
+              properties[fieldName] = 'string';
+          }
+        }
+      }
+    }
+
+    // Parse $dates array
+    const datesMatch = modelContent.match(/protected\s+\$dates\s*=\s*\[([\s\S]*?)\]/);
+    if (datesMatch) {
+      const datesContent = datesMatch[1];
+      const dateItems = datesContent.match(/'([^']+)'/g) || [];
+      dateItems.forEach(item => {
+        const fieldName = item.replace(/'/g, '');
+        properties[fieldName] = 'Carbon';
+      });
+    }
+
+    // Parse PHPDoc @property annotations
+    const phpDocMatches = modelContent.matchAll(/\*\s*@property\s+(\w+(?:\[\])?)\s+\$(\w+)/g);
+    for (const match of phpDocMatches) {
+      const [, phpDocType, fieldName] = match;
+      
+      // Map PHPDoc types to our types
+      let mappedType = 'string';
+      if (phpDocType.includes('int') || phpDocType.includes('integer')) {
+        mappedType = 'int';
+      } else if (phpDocType.includes('bool') || phpDocType.includes('boolean')) {
+        mappedType = 'bool';
+      } else if (phpDocType.includes('float') || phpDocType.includes('double')) {
+        mappedType = 'float';
+      } else if (phpDocType.includes('array') || phpDocType.includes('[]')) {
+        mappedType = 'array';
+      } else if (phpDocType.includes('Carbon') || phpDocType.includes('DateTime')) {
+        mappedType = 'Carbon';
+      }
+      
+      properties[fieldName] = mappedType;
+    }
+
+    // Parse relation methods
+    const relationMethods = parseRelationMethods(modelContent);
+    for (const [relationName, relationType] of Object.entries(relationMethods)) {
+      properties[relationName] = relationType;
+    }
+
+    // Add standard Eloquent properties 
+    const baseProperties = {
+      'id': 'int',
+      'created_at': 'Carbon',
+      'updated_at': 'Carbon',
+      'save': 'bool',
+      'delete': 'bool',
+      'update': 'bool',
+      'fresh': modelName,
+      'refresh': modelName,
+      'toArray': 'array',
+      'toJson': 'string',
+      'getAttribute': 'mixed',
+      'setAttribute': 'void',
+      'fill': modelName,
+      'isDirty': 'bool',
+      'isClean': 'bool',
+      'wasRecentlyCreated': 'bool',
+      'exists': 'bool',
+      'load': modelName,
+      'loadMissing': modelName,
+      'with': modelName
+    };
+
+    return { ...properties, ...baseProperties };
+    
+  } catch (error) {
+    console.error(`Error parsing model ${modelName}:`, error);
+    return {};
+  }
+};
+
+/**
+ * Get type properties for autocomplete
+ */
+export const inferTypeProperties = (type: PHPType): Record<string, string> => {
+  const properties: Record<string, string> = {};
+
+  // First check if it's a class type
+  if (type && type !== 'mixed' && /^[A-Z]/.test(type)) {
+    // Check if it's actually an enum first
+    if (isValidEnumClass(type) || isTraditionalEnumClass(type)) {
+      const enumProperties = parseEnumProperties(type);
+      if (Object.keys(enumProperties).length > 0) {
+        return enumProperties;
+      }
+    }
+    
+    // If not an enum, try parsing as a custom model
+    const modelProperties = parseModelProperties(type);
+    if (Object.keys(modelProperties).length > 0) {
+      return modelProperties;
+    }
+  }
+
+  switch (type) {
+    case 'Collection':
+      return {
+        'count': 'int',
+        'first': 'mixed',
+        'last': 'mixed',
+        'isEmpty': 'bool',
+        'isNotEmpty': 'bool',
+        'map': 'Collection',
+        'filter': 'Collection',
+        'where': 'Collection',
+        'pluck': 'Collection',
+        'toArray': 'array',
+        'toJson': 'string',
+        'each': 'Collection',
+        'chunk': 'Collection',
+        'sort': 'Collection',
+        'sortBy': 'Collection',
+        'reverse': 'Collection',
+        'unique': 'Collection'
+      };
+
+    case 'Carbon':
+      return {
+        'format': 'string',
+        'diffForHumans': 'string',
+        'toDateString': 'string',
+        'toTimeString': 'string',
+        'toDateTimeString': 'string',
+        'timestamp': 'int',
+        'year': 'int',
+        'month': 'int',
+        'day': 'int',
+        'hour': 'int',
+        'minute': 'int',
+        'second': 'int',
+        'addDays': 'Carbon',
+        'subDays': 'Carbon',
+        'addHours': 'Carbon',
+        'subHours': 'Carbon',
+        'isToday': 'bool',
+        'isTomorrow': 'bool',
+        'isYesterday': 'bool',
+        'isPast': 'bool',
+        'isFuture': 'bool'
+      };
+
+    case 'Request':
+      return {
+        'get': 'mixed',
+        'post': 'mixed',
+        'all': 'array',
+        'input': 'mixed',
+        'has': 'bool',
+        'filled': 'bool',
+        'missing': 'bool',
+        'only': 'array',
+        'except': 'array',
+        'query': 'mixed',
+        'file': 'mixed',
+        'hasFile': 'bool',
+        'ip': 'string',
+        'userAgent': 'string',
+        'url': 'string',
+        'fullUrl': 'string',
+        'path': 'string',
+        'method': 'string',
+        'isMethod': 'bool',
+        'ajax': 'bool',
+        'json': 'mixed',
+        'header': 'string'
+      };
+
+    case 'string':
+      return {
+        'length': 'int',
+        'upper': 'string',
+        'lower': 'string',
+        'trim': 'string',
+        'substr': 'string',
+        'replace': 'string',
+        'contains': 'bool',
+        'startsWith': 'bool',
+        'endsWith': 'bool'
+      };
+
+    case 'array':
+      return {
+        'count': 'int',
+        'length': 'int',
+        'keys': 'array',
+        'values': 'array',
+        'merge': 'array',
+        'push': 'int',
+        'pop': 'mixed',
+        'shift': 'mixed',
+        'unshift': 'int',
+        'slice': 'array',
+        'reverse': 'array',
+        'sort': 'bool'
+      };
+
+    default:
+      // For Collection<Model> types
+      if (type && type.startsWith('Collection<') && type.endsWith('>')) {
+        const modelName = type.slice(11, -1); // Extract model name from Collection<Model>
+        return {
+          'count': 'int',
+          'first': modelName,
+          'last': modelName,
+          'isEmpty': 'bool',
+          'isNotEmpty': 'bool',
+          'map': 'Collection',
+          'filter': `Collection<${modelName}>`,
+          'where': `Collection<${modelName}>`,
+          'pluck': 'Collection',
+          'toArray': 'array',
+          'toJson': 'string',
+          'each': `Collection<${modelName}>`,
+          'chunk': 'Collection',
+          'sort': `Collection<${modelName}>`,
+          'sortBy': `Collection<${modelName}>`,
+          'reverse': `Collection<${modelName}>`,
+          'unique': `Collection<${modelName}>`,
+          'take': `Collection<${modelName}>`,
+          'skip': `Collection<${modelName}>`,
+          'slice': `Collection<${modelName}>`,
+          'random': modelName,
+          'shuffle': `Collection<${modelName}>`,
+          'groupBy': 'Collection',
+          'keyBy': 'Collection',
+          'forPage': `Collection<${modelName}>`,
+          'load': `Collection<${modelName}>`,
+          'loadMissing': `Collection<${modelName}>`
+        };
+      }
+      
+      // For custom model classes, provide common Eloquent methods
+      if (type && type !== 'mixed' && /^[A-Z]/.test(type)) {
+        return {
+          'id': 'int',
+          'save': 'bool',
+          'delete': 'bool',
+          'update': 'bool',
+          'fresh': type,
+          'refresh': type,
+          'toArray': 'array',
+          'toJson': 'string',
+          'getAttribute': 'mixed',
+          'setAttribute': 'void',
+          'fill': type,
+          'isDirty': 'bool',
+          'isClean': 'bool',
+          'wasRecentlyCreated': 'bool',
+          'exists': 'bool',
+          'created_at': 'Carbon',
+          'updated_at': 'Carbon',
+          'load': type,
+          'loadMissing': type,
+          'with': type
+        };
+      }
+      return {};
   }
 };
 
 
-/**
- * 
- * Unconfirmed
- */
-const isCallExpression = (node: Node | null): node is CallExpression => {
-  return node !== null && node.kind === 'call';
-};
+
+
+
+
+
 
 /**
- * 
- * Unconfirmed
+ * Replace dots with slashes. Convert to Laravel's standard view path (relative path from resources/views/) and add .blade.php at the end
  */
-const isPropertyLookup = (node: Node | null): node is PropertyLookup => {
-  return node !== null && node.kind === 'propertylookup';
-};
-
-/**
- * 
- * Unconfirmed
- */
-const isIdentifier = (node: Node | null): node is Identifier => {
-  return node !== null && node.kind === 'identifier';
-};
-
-/**
- * Confirmed
- */
-const isStringNode = (node: Node | null): node is StringNode => {
-  return node !== null && node.kind === 'string';
-};
-
-/**
- * Confirmed
- */
-const isVariableNode = (node: Node | null): node is StringNode => {
-  return node !== null && node.kind === 'variable';
-};
-
-/**
- * 
- * Unconfirmed
- */
-const isArray = (node: Node | null): node is ArrayNode => {
-  return node !== null &&
-    node.kind === 'array' &&
-    'items' in node &&
-    'shortForm' in node;
-};
-
-/**
- * 
- * Unconfirmed
- */
-const isEntry = (node: Node | null): node is Entry => {
-  return node !== null &&
-    node.kind === 'entry' &&
-    'key' in node &&
-    'value' in node;
+const convertToBladeFilePath = (dotNotationPath?: string): string | undefined => {
+  if (!dotNotationPath) { return; }
+  const relativePath = dotNotationPath?.replace(/\./g, '/');
+  const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri?.fsPath || process.cwd();
+  const absoluteViewPath = `file://${workspaceRoot}/resources/views`;
+  return `${absoluteViewPath}/${relativePath}.blade.php`;
 };
 
 // PHP type information
@@ -287,67 +1034,5 @@ export type BladeVarInfo = {
   properties?: Record<string, string>;
 }
 
-/**
- * Extract CallExpression where function name is 'view'
- */
-const isViewCall = (node: CallExpression): boolean => {
-  if (isPropertyLookup(node.what)) { return false; }
-  const nameNode = node.what as NameNode;
-  return nameNode.name === 'view'; // Call expression named 'view'.
-};
-
-/**
- * Return with blade file path as key and passed variable information as value
- */
-const parseViewCall = (node: CallExpression): VarNameSourceJumpTos[] => {
-  const viewArgs = node.arguments as Argument[];
-
-  const dotNotationBladePath = (viewArgs[0] as StringNode).value;
-  const bladeFilePath = convertToBladeFilePath(dotNotationBladePath);
-
-  if (viewArgs.length > 1 && viewArgs[1].kind === 'array') {
-    const arrayNode = viewArgs[1] as ArrayNode;
-    const varNameSources = extractVariablesFromArray(arrayNode);
-
-    if (bladeFilePath && varNameSources) {
-      const varNameSourceJumpTos = varNameSources.map(v => ({...v, jumpTargetUri: bladeFilePath}));
-      return varNameSourceJumpTos;
-    }
-  }
-  return [];
-};
-
-/**
- * Replace dots with slashes. Convert to Laravel's standard view path (relative path from resources/views/) and add .blade.php at the end
- */
-const convertToBladeFilePath = (dotNotationPath?: string): string | undefined => {
-  if (!dotNotationPath) { return; }
-  const relativePath = dotNotationPath?.replace(/\./g, '/');
-  const workspaceRoot = process.cwd(); // Project root path
-  const absoluteViewPath = `file://${workspaceRoot}/resources/views`;
-  return `${absoluteViewPath}/${relativePath}.blade.php`;
-};
-
-/**
- * Convert ASTNode to custom VariableInfo type.
- */
-const extractVariablesFromArray = (node: ArrayNode, depth = 0): VarNameSourceJumpTos[] | undefined => {
-  if (!node.items || depth > 5) { return; }
-
-  let varNameSources: VarNameSourceJumpTos[] = [];
-
-  node.items.forEach(item => {
-    if (!isEntry(item)) { return; }
-
-    if (isStringNode(item.key) && isVariableNode(item.value)) {
-      varNameSources.push({
-        name: `$${(item.key as StringNode).value}`,
-        source: item.value.loc?.source ?? 'undefined',
-      });
-    }
-  });
-
-  return varNameSources;
-};
 
 
