@@ -2,11 +2,11 @@
   "name": "laravel-blade-vars-bridge",
   "displayName": "Laravel-Blade-Vars-Bridge",
   "description": "Laravel Blade variables autocomplete and IntelliSense - Bridge controller variables to Blade templates with hover information and completion",
-  "version": "0.0.6",
+  "version": "0.0.7",
   "publisher": "mrksye",
   "license": "MIT",
   "author": {
-    "name": "Mrksye"
+    "name": "mrksye"
   },
   "repository": {
     "type": "git",
@@ -16,11 +16,7 @@
   "bugs": {
     "url": "https://github.com/mrksye/laravel-blade-vars-bridge/issues"
   },
-  "readme": {
-    "ja": "README.ja.md",
-    "en": "README.md",
-    "zh": "README.zh.md"
-  },
+  "readme": "README.md",
   "keywords": [
     "laravel",
     "blade",

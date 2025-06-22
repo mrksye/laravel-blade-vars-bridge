@@ -1,5 +1,5 @@
 import * as vscode from 'vscode';
-import { BladeVarInfo, listControllerFiles, parseViewVariablesFromController } from './parsing/scan-controller';
+import { BladeVarInfo, listControllerFiles, parseViewVariablesFromController, inferTypeProperties } from './parsing/scan-controller';
 
 let phpWasm: any = null;
 let allBladeVarInfos: BladeVarInfo[] = [];
@@ -14,10 +14,6 @@ export async function activate(context: vscode.ExtensionContext) {
 	console.log('Laravel Blade Vars Bridge extension activating...');
 	const outputChannel = vscode.window.createOutputChannel('Laravel Blade Vars Bridge Debug Channel');
 	outputChannel.appendLine('Laravel Blade Vars Bridge extension has been activated!');
-	outputChannel.show();
-	
-	// Show notification to confirm activation
-	vscode.window.showInformationMessage('Laravel Blade Vars Bridge extension activated!');
 
 	try {
 		// Test Node.js availability
@@ -43,7 +39,7 @@ export async function activate(context: vscode.ExtensionContext) {
 			}
 		);
 
-		// Register completion provider
+		// Register completion provider for variables
 		const completionProvider = vscode.languages.registerCompletionItemProvider(
 			[
 				{ scheme: 'file', language: 'blade' },
@@ -54,7 +50,21 @@ export async function activate(context: vscode.ExtensionContext) {
 					return provideCompletionItems(document, position);
 				}
 			},
-			'$', '-', '>'
+			'$'
+		);
+
+		// Register completion provider for properties/methods (triggered by ->)
+		const propertyCompletionProvider = vscode.languages.registerCompletionItemProvider(
+			[
+				{ scheme: 'file', language: 'blade' },
+				{ scheme: 'file', pattern: '**/*.blade.php' }
+			],
+			{
+				provideCompletionItems(document, position) {
+					return providePropertyCompletionItems(document, position);
+				}
+			},
+			'-', '>'
 		);
 
 		// Register refresh command
@@ -66,7 +76,7 @@ export async function activate(context: vscode.ExtensionContext) {
 
 		// Status bar item
 		const statusBarItem = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Right, 100);
-		statusBarItem.text = '$(info) Blade Variables';
+		statusBarItem.text = '$(info) Blade Vars Bridge';
 		statusBarItem.tooltip = 'Update Blade variable information';
 		statusBarItem.command = 'laravel-blade-vars-bridge.refreshVariables';
 		statusBarItem.show();
@@ -89,6 +99,7 @@ export async function activate(context: vscode.ExtensionContext) {
 		context.subscriptions.push(
 			hoverProvider,
 			completionProvider,
+			propertyCompletionProvider,
 			refreshCommand,
 			statusBarItem,
 			watcher,
@@ -208,14 +219,189 @@ function provideCompletionItems(document: vscode.TextDocument, position: vscode.
 	if (!variableMatch) { return []; }
 
 	const varInfos = allBladeVarInfos.filter((v) => v.jumpTargetUri === bladeUri);
+	const foreachVars = getForeachVariablesAtPosition(document, position);
 	
-	return varInfos.map((varInfo) => {
+	// Combine regular variables and foreach variables
+	const allVars = [...varInfos, ...foreachVars];
+	
+	return allVars.map((varInfo) => {
 		const fileName = varInfo.definedInPath!.match(/[^\/]+$/)?.[0] || "";
 		const completionItem = new vscode.CompletionItem(varInfo.name.slice(1), vscode.CompletionItemKind.Variable);
 		completionItem.detail = varInfo.type || 'mixed';
 		completionItem.documentation = new vscode.MarkdownString(`From: [${fileName}](${varInfo.definedInPath!})`);
 		return completionItem;
 	});
+}
+
+/**
+ * Provide completion items for variable properties and methods (triggered by ->)
+ */
+function providePropertyCompletionItems(document: vscode.TextDocument, position: vscode.Position): vscode.CompletionItem[] {
+	const bladeUri = document.uri.toString();
+	const line = document.lineAt(position.line);
+	const linePrefix = line.text.slice(0, position.character);
+
+	// Parse property chain: $variable->property1->method()->property2->
+	const chainMatch = linePrefix.match(/\$([a-zA-Z_][a-zA-Z0-9_]*)((?:->[a-zA-Z_][a-zA-Z0-9_]*(?:\(\))?)*)->\s*$/);
+	if (!chainMatch) { return []; }
+
+	const varName = '$' + chainMatch[1];
+	const propertyChain = chainMatch[2];
+	
+	// Get the initial variable
+	let varInfo = allBladeVarInfos.find((v) => v.jumpTargetUri === bladeUri && v.name === varName);
+	
+	if (!varInfo) {
+		// Check foreach variables at current position
+		const foreachVars = getForeachVariablesAtPosition(document, position);
+		varInfo = foreachVars.find((v) => v.name === varName);
+	}
+	
+	if (!varInfo) { return []; }
+
+	// Resolve the final type by following the property chain
+	const finalType = resolvePropertyChainType(varInfo.type || 'mixed', propertyChain);
+	const finalProperties = inferTypeProperties(finalType);
+	
+	if (!finalProperties || Object.keys(finalProperties).length === 0) { return []; }
+
+	// Create completion items from type properties
+	const completionItems: vscode.CompletionItem[] = [];
+	
+	for (const [propertyName, propertyType] of Object.entries(finalProperties)) {
+		const currentType = finalType;
+		const isCollectionType = currentType === 'Collection' || currentType.startsWith('Collection<');
+		const isMethod = (isCollectionType || ['Carbon', 'Request'].includes(currentType)) && 
+						 !['id', 'length', 'count', 'year', 'month', 'day', 'hour', 'minute', 'second', 'timestamp', 'created_at', 'updated_at'].includes(propertyName);
+		
+		// Set priority based on property type
+		const eloquentMethods = ['save', 'delete', 'update', 'fresh', 'refresh', 'toArray', 'toJson', 
+								  'getAttribute', 'setAttribute', 'fill', 'isDirty', 'isClean', 
+								  'wasRecentlyCreated', 'exists', 'load', 'loadMissing', 'with'];
+		const lateProperties = ['id']; // Properties that should come after model properties
+		const isModelProperty = !eloquentMethods.includes(propertyName) && !lateProperties.includes(propertyName);
+		
+		// Set icon based on property type
+		let kind: vscode.CompletionItemKind;
+		if (isMethod) {
+			kind = vscode.CompletionItemKind.Method;
+		} else if (isModelProperty) {
+			kind = vscode.CompletionItemKind.Field; // Model properties use Field icon
+		} else {
+			kind = vscode.CompletionItemKind.Property; // Base properties use Property icon
+		}
+		
+		const completionItem = new vscode.CompletionItem(propertyName, kind);
+		
+		completionItem.detail = propertyType;
+		completionItem.documentation = new vscode.MarkdownString(`**${finalType}** ${isMethod ? 'method' : 'property'}: returns \`${propertyType}\``);
+		
+		if (eloquentMethods.includes(propertyName)) {
+			completionItem.sortText = '2_' + propertyName; // Eloquent methods second
+		} else if (lateProperties.includes(propertyName)) {
+			completionItem.sortText = '3_' + propertyName; // Late properties last
+		} else {
+			completionItem.sortText = '1_' + propertyName; // Model properties (including created_at, updated_at) first
+		}
+		
+		// Add parentheses for methods
+		if (isMethod) {
+			completionItem.insertText = propertyName + '()';
+			completionItem.command = {
+				command: 'editor.action.triggerSuggest',
+				title: 'Re-trigger completions...'
+			};
+		}
+		
+		completionItems.push(completionItem);
+	}
+	
+	return completionItems;
+}
+
+/**
+ * Get foreach variables that are valid at the current position
+ */
+function getForeachVariablesAtPosition(document: vscode.TextDocument, position: vscode.Position): BladeVarInfo[] {
+	const text = document.getText();
+	const currentOffset = document.offsetAt(position);
+	const foreachVars: BladeVarInfo[] = [];
+
+	// Find all @foreach patterns and their corresponding @endforeach
+	const foreachPattern = /@fore(?:ach|lse)\s*\(\s*\$(\w+)\s+as\s+\$(\w+)\s*\)/g;
+	let match;
+
+	while ((match = foreachPattern.exec(text)) !== null) {
+		const foreachStart = match.index;
+		const collectionVar = '$' + match[1];
+		const itemVar = '$' + match[2];
+
+		// Find the corresponding @endforeach or @endforelse
+		const endPattern = /@end(?:foreach|forelse)/g;
+		endPattern.lastIndex = foreachStart + match[0].length;
+		
+		const endMatch = endPattern.exec(text);
+		const foreachEnd = endMatch ? endMatch.index + endMatch[0].length : text.length;
+
+		// Check if current position is within this foreach block
+		if (currentOffset >= foreachStart && currentOffset <= foreachEnd) {
+			// Find the collection variable info from controller
+			const bladeUri = document.uri.toString();
+			const collectionInfo = allBladeVarInfos.find((v) => 
+				v.jumpTargetUri === bladeUri && v.name === collectionVar
+			);
+
+			if (collectionInfo && collectionInfo.type && 
+				collectionInfo.type.startsWith('Collection<') && 
+				collectionInfo.type.endsWith('>')) {
+				
+				const itemType = collectionInfo.type.slice(11, -1); // Extract Model from Collection<Model>
+				
+				foreachVars.push({
+					name: itemVar,
+					source: `${collectionVar} (foreach item)`,
+					jumpTargetUri: bladeUri,
+					definedInPath: collectionInfo.definedInPath,
+					type: itemType,
+					properties: inferTypeProperties(itemType)
+				});
+			}
+		}
+	}
+
+	return foreachVars;
+}
+
+/**
+ * Resolve the final type by following a property chain
+ */
+function resolvePropertyChainType(initialType: string, propertyChain: string): string {
+	let currentType = initialType;
+	
+	if (!propertyChain) {
+		return currentType;
+	}
+	
+	// Split the chain into individual property/method calls
+	// e.g. "->user->comments->first()" becomes ["user", "comments", "first()"]
+	const chainParts = propertyChain.split('->').filter(part => part.trim());
+	
+	for (const part of chainParts) {
+		const isMethod = part.endsWith('()');
+		const propertyName = isMethod ? part.slice(0, -2) : part;
+		
+		// Get properties for the current type
+		const typeProperties = inferTypeProperties(currentType);
+		
+		if (typeProperties && typeProperties[propertyName]) {
+			currentType = typeProperties[propertyName];
+		} else {
+			// If we can't resolve the type, return mixed
+			return 'mixed';
+		}
+	}
+	
+	return currentType;
 }
 
 /**

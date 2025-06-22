@@ -45,14 +45,39 @@ export const parseViewVariablesFromController = async (controllerPath: string): 
       while ((varMatch = varPattern.exec(varsString)) !== null) {
         const varName = '$' + varMatch[1];
         const sourceVar = '$' + varMatch[2];
+        const inferredType = inferVariableType(rawCode, varMatch[2]);
+        const properties = inferTypeProperties(inferredType);
 
         bladeVarInfo.push({
           name: varName,
           source: sourceVar,
           jumpTargetUri: convertToBladeFilePath(viewName) || '',
           definedInPath: controllerPath,
-          type: 'mixed'
+          type: inferredType,
+          properties: properties
         });
+
+        // If it's a collection type, add the individual item type for foreach loops
+        if (inferredType.startsWith('Collection<') && inferredType.endsWith('>')) {
+          const itemType = inferredType.slice(11, -1); // Extract Model from Collection<Model>
+          
+          // Parse Blade template to find actual foreach variable names
+          const bladeFilePath = convertToBladeFilePath(viewName);
+          if (bladeFilePath) {
+            const foreachVars = extractForeachVariables(bladeFilePath, varName);
+            
+            for (const foreachVar of foreachVars) {
+              bladeVarInfo.push({
+                name: foreachVar,
+                source: `${varName} (foreach item)`,
+                jumpTargetUri: bladeFilePath,
+                definedInPath: controllerPath,
+                type: itemType,
+                properties: inferTypeProperties(itemType)
+              });
+            }
+          }
+        }
       }
     }
 
@@ -69,13 +94,40 @@ export const parseViewVariablesFromController = async (controllerPath: string): 
       
       for (const varName of varNames) {
         if (varName) {
+          const inferredType = inferVariableType(rawCode, varName);
+          const properties = inferTypeProperties(inferredType);
+          const fullVarName = '$' + varName;
+          
           bladeVarInfo.push({
-            name: '$' + varName,
-            source: '$' + varName,
+            name: fullVarName,
+            source: fullVarName,
             jumpTargetUri: convertToBladeFilePath(viewName) || '',
             definedInPath: controllerPath,
-            type: 'mixed'
+            type: inferredType,
+            properties: properties
           });
+
+          // If it's a collection type, add the individual item type for foreach loops
+          if (inferredType.startsWith('Collection<') && inferredType.endsWith('>')) {
+            const itemType = inferredType.slice(11, -1); // Extract Model from Collection<Model>
+            
+            // Parse Blade template to find actual foreach variable names
+            const bladeFilePath = convertToBladeFilePath(viewName);
+            if (bladeFilePath) {
+              const foreachVars = extractForeachVariables(bladeFilePath, fullVarName);
+              
+              for (const foreachVar of foreachVars) {
+                bladeVarInfo.push({
+                  name: foreachVar,
+                  source: `${fullVarName} (foreach item)`,
+                  jumpTargetUri: bladeFilePath,
+                  definedInPath: controllerPath,
+                  type: itemType,
+                  properties: inferTypeProperties(itemType)
+                });
+              }
+            }
+          }
         }
       }
     }
@@ -84,6 +136,536 @@ export const parseViewVariablesFromController = async (controllerPath: string): 
   } catch (error) {
     console.error(`Error parsing ${controllerPath}:`, error);
     return [];
+  }
+};
+
+/**
+ * Infer variable type from PHP code context
+ */
+export const inferVariableType = (code: string, varName: string): PHPType => {
+  // Look for complex Eloquent query patterns first
+  const eloquentQueryPattern = new RegExp(
+    `\\$${varName}\\s*=\\s*([A-Z][a-zA-Z0-9_]+)::query\\(\\)[\\s\\S]*?->get\\(\\);?`,
+    'g'
+  );
+  
+  const eloquentMatch = code.match(eloquentQueryPattern);
+  if (eloquentMatch) {
+    const modelName = eloquentMatch[0].match(/([A-Z][a-zA-Z0-9_]+)::query/)?.[1];
+    if (modelName) {
+      return `Collection<${modelName}>`;
+    }
+  }
+
+  // Look for variable assignment patterns
+  const patterns = [
+    // Model::find(), Model::where(), etc. (single model)
+    new RegExp(`\\$${varName}\\s*=\\s*([A-Z][a-zA-Z0-9_]+)::(find|first|create|make)\\s*\\(`, 'g'),
+    // Model::get(), Model::all() (collection)
+    new RegExp(`\\$${varName}\\s*=\\s*([A-Z][a-zA-Z0-9_]+)::(get|all|where)[\\s\\S]*?->get\\(\\)`, 'g'),
+    // Direct Model::where()->get() pattern
+    new RegExp(`\\$${varName}\\s*=\\s*([A-Z][a-zA-Z0-9_]+)::where[\\s\\S]*?get\\(\\)`, 'g'),
+    // new ClassName()
+    new RegExp(`\\$${varName}\\s*=\\s*new\\s+([A-Z][a-zA-Z0-9_\\\\]+)\\s*\\(`, 'g'),
+    // Collection methods
+    new RegExp(`\\$${varName}\\s*=\\s*collect\\s*\\(`, 'g'),
+    // Carbon dates
+    new RegExp(`\\$${varName}\\s*=\\s*(Carbon::|now\\(|today\\(|\\\\Carbon\\\\Carbon::)`, 'g'),
+    // Arrays
+    new RegExp(`\\$${varName}\\s*=\\s*\\[`, 'g'),
+    // Strings
+    new RegExp(`\\$${varName}\\s*=\\s*['"]`, 'g'),
+    // Numbers
+    new RegExp(`\\$${varName}\\s*=\\s*\\d+`, 'g'),
+    // Boolean
+    new RegExp(`\\$${varName}\\s*=\\s*(true|false)`, 'g'),
+    // Request
+    new RegExp(`\\$${varName}\\s*=\\s*\\$request`, 'g'),
+  ];
+
+  // Check for single model patterns (find, first, etc.)
+  const singleModelMatch = code.match(patterns[0]);
+  if (singleModelMatch) {
+    const modelName = singleModelMatch[0].match(/([A-Z][a-zA-Z0-9_]+)::/)?.[1];
+    if (modelName) {
+      return modelName;
+    }
+  }
+
+  // Check for collection patterns (get, all, where->get)
+  const collectionModelMatch = code.match(patterns[1]) || code.match(patterns[2]);
+  if (collectionModelMatch) {
+    const modelName = collectionModelMatch[0].match(/([A-Z][a-zA-Z0-9_]+)::/)?.[1];
+    if (modelName) {
+      return `Collection<${modelName}>`;
+    }
+  }
+
+  // Check for new instance patterns
+  const newMatch = code.match(patterns[3]);
+  if (newMatch) {
+    const className = newMatch[0].match(/new\s+([A-Z][a-zA-Z0-9_\\]+)/)?.[1];
+    if (className) {
+      return className.replace(/\\/g, '');
+    }
+  }
+
+  // Check for collection
+  if (patterns[4].test(code)) {
+    return 'Collection';
+  }
+
+  // Check for Carbon
+  if (patterns[5].test(code)) {
+    return 'Carbon';
+  }
+
+  // Check for array
+  if (patterns[6].test(code)) {
+    return 'array';
+  }
+
+  // Check for string
+  if (patterns[7].test(code)) {
+    return 'string';
+  }
+
+  // Check for number
+  if (patterns[8].test(code)) {
+    return 'int';
+  }
+
+  // Check for boolean
+  if (patterns[9].test(code)) {
+    return 'bool';
+  }
+
+  // Check for request
+  if (patterns[10].test(code)) {
+    return 'Request';
+  }
+
+  return 'mixed';
+};
+
+/**
+ * Extract foreach variable names from Blade template
+ */
+export const extractForeachVariables = (bladeFilePath: string, collectionVar: string): string[] => {
+  try {
+    // Convert file:// URI to actual file path
+    const filePath = bladeFilePath.replace('file://', '');
+    
+    // Check if file exists before reading
+    if (!require('fs').existsSync(filePath)) {
+      return [];
+    }
+    
+    const bladeContent = require('fs').readFileSync(filePath, 'utf-8');
+    const foreachVars: string[] = [];
+    
+    // Pattern to match @foreach ($collection as $item) or @forelse ($collection as $item)
+    const foreachPattern = new RegExp(
+      `@fore(?:ach|lse)\\s*\\(\\s*\\${collectionVar.slice(1)}\\s+as\\s+\\$(\\w+)\\s*\\)`,
+      'g'
+    );
+    
+    let match;
+    while ((match = foreachPattern.exec(bladeContent)) !== null) {
+      const itemVar = '$' + match[1];
+      if (!foreachVars.includes(itemVar)) {
+        foreachVars.push(itemVar);
+      }
+    }
+    
+    return foreachVars;
+  } catch (error) {
+    console.error(`Error reading Blade file ${bladeFilePath}:`, error);
+    return [];
+  }
+};
+
+/**
+ * Parse relation methods from Model content
+ */
+const parseRelationMethods = (modelContent: string): Record<string, string> => {
+  const relations: Record<string, string> = {};
+  
+  // Pattern to match relation methods
+  const relationPatterns = [
+    // hasOne, belongsTo (single model)
+    /public\s+function\s+(\w+)\s*\([^)]*\)\s*(?::\s*\w+)?\s*\{[^}]*return\s+\$this->(hasOne|belongsTo)\s*\(/g,
+    // hasMany, belongsToMany (collection)
+    /public\s+function\s+(\w+)\s*\([^)]*\)\s*(?::\s*\w+)?\s*\{[^}]*return\s+\$this->(hasMany|belongsToMany)\s*\(/g,
+    // morphTo, morphOne, morphMany
+    /public\s+function\s+(\w+)\s*\([^)]*\)\s*(?::\s*\w+)?\s*\{[^}]*return\s+\$this->(morphTo|morphOne|morphMany)\s*\(/g
+  ];
+
+  for (const pattern of relationPatterns) {
+    let match;
+    while ((match = pattern.exec(modelContent)) !== null) {
+      const [, methodName, relationType] = match;
+      
+      // Map relation types to return types
+      switch (relationType) {
+        case 'hasOne':
+        case 'belongsTo':
+        case 'morphTo':
+        case 'morphOne':
+          // Try to extract the related model from the relation call
+          const singleModelMatch = match[0].match(/\$this->\w+\s*\(\s*([A-Z]\w+)::class/);
+          if (singleModelMatch) {
+            relations[methodName] = singleModelMatch[1];
+          } else {
+            relations[methodName] = 'Model'; // Fallback to generic model
+          }
+          break;
+          
+        case 'hasMany':
+        case 'belongsToMany':
+        case 'morphMany':
+          // Try to extract the related model for collections
+          const collectionModelMatch = match[0].match(/\$this->\w+\s*\(\s*([A-Z]\w+)::class/);
+          if (collectionModelMatch) {
+            relations[methodName] = `Collection<${collectionModelMatch[1]}>`;
+          } else {
+            relations[methodName] = 'Collection'; // Fallback to generic collection
+          }
+          break;
+      }
+    }
+  }
+
+  return relations;
+};
+
+/**
+ * Parse Model file to extract properties
+ */
+export const parseModelProperties = (modelName: string): Record<string, string> => {
+  try {
+    const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri?.fsPath;
+    if (!workspaceRoot) return {};
+
+    // Common model paths in Laravel
+    const modelPaths = [
+      `${workspaceRoot}/app/Models/${modelName}.php`,
+      `${workspaceRoot}/app/${modelName}.php`
+    ];
+
+    let modelContent = '';
+    for (const modelPath of modelPaths) {
+      if (fs.existsSync(modelPath)) {
+        modelContent = fs.readFileSync(modelPath, 'utf-8');
+        break;
+      }
+    }
+
+    if (!modelContent) return {};
+
+    const properties: Record<string, string> = {};
+
+    // Parse $fillable array
+    const fillableMatch = modelContent.match(/protected\s+\$fillable\s*=\s*\[([\s\S]*?)\]/);
+    if (fillableMatch) {
+      const fillableContent = fillableMatch[1];
+      const fillableItems = fillableContent.match(/'([^']+)'/g) || [];
+      fillableItems.forEach(item => {
+        const fieldName = item.replace(/'/g, '');
+        properties[fieldName] = 'string'; // Default to string
+      });
+    }
+
+    // Parse $casts array for more specific types
+    const castsMatch = modelContent.match(/protected\s+\$casts\s*=\s*\[([\s\S]*?)\]/);
+    if (castsMatch) {
+      const castsContent = castsMatch[1];
+      const castLines = castsContent.split(',');
+      
+      for (const line of castLines) {
+        const castMatch = line.match(/'([^']+)'\s*=>\s*'([^']+)'/);
+        if (castMatch) {
+          const [, fieldName, castType] = castMatch;
+          
+          // Map Laravel cast types to our types
+          switch (castType) {
+            case 'datetime':
+            case 'date':
+            case 'timestamp':
+              properties[fieldName] = 'Carbon';
+              break;
+            case 'integer':
+            case 'int':
+              properties[fieldName] = 'int';
+              break;
+            case 'boolean':
+            case 'bool':
+              properties[fieldName] = 'bool';
+              break;
+            case 'float':
+            case 'double':
+            case 'decimal':
+              properties[fieldName] = 'float';
+              break;
+            case 'array':
+            case 'json':
+              properties[fieldName] = 'array';
+              break;
+            default:
+              properties[fieldName] = 'string';
+          }
+        }
+      }
+    }
+
+    // Parse $dates array
+    const datesMatch = modelContent.match(/protected\s+\$dates\s*=\s*\[([\s\S]*?)\]/);
+    if (datesMatch) {
+      const datesContent = datesMatch[1];
+      const dateItems = datesContent.match(/'([^']+)'/g) || [];
+      dateItems.forEach(item => {
+        const fieldName = item.replace(/'/g, '');
+        properties[fieldName] = 'Carbon';
+      });
+    }
+
+    // Parse PHPDoc @property annotations
+    const phpDocMatches = modelContent.matchAll(/\*\s*@property\s+(\w+(?:\[\])?)\s+\$(\w+)/g);
+    for (const match of phpDocMatches) {
+      const [, phpDocType, fieldName] = match;
+      
+      // Map PHPDoc types to our types
+      let mappedType = 'string';
+      if (phpDocType.includes('int') || phpDocType.includes('integer')) {
+        mappedType = 'int';
+      } else if (phpDocType.includes('bool') || phpDocType.includes('boolean')) {
+        mappedType = 'bool';
+      } else if (phpDocType.includes('float') || phpDocType.includes('double')) {
+        mappedType = 'float';
+      } else if (phpDocType.includes('array') || phpDocType.includes('[]')) {
+        mappedType = 'array';
+      } else if (phpDocType.includes('Carbon') || phpDocType.includes('DateTime')) {
+        mappedType = 'Carbon';
+      }
+      
+      properties[fieldName] = mappedType;
+    }
+
+    // Parse relation methods
+    const relationMethods = parseRelationMethods(modelContent);
+    for (const [relationName, relationType] of Object.entries(relationMethods)) {
+      properties[relationName] = relationType;
+    }
+
+    // Add standard Eloquent properties 
+    const baseProperties = {
+      'id': 'int',
+      'created_at': 'Carbon',
+      'updated_at': 'Carbon',
+      'save': 'bool',
+      'delete': 'bool',
+      'update': 'bool',
+      'fresh': modelName,
+      'refresh': modelName,
+      'toArray': 'array',
+      'toJson': 'string',
+      'getAttribute': 'mixed',
+      'setAttribute': 'void',
+      'fill': modelName,
+      'isDirty': 'bool',
+      'isClean': 'bool',
+      'wasRecentlyCreated': 'bool',
+      'exists': 'bool',
+      'load': modelName,
+      'loadMissing': modelName,
+      'with': modelName
+    };
+
+    return { ...properties, ...baseProperties };
+    
+  } catch (error) {
+    console.error(`Error parsing model ${modelName}:`, error);
+    return {};
+  }
+};
+
+/**
+ * Get type properties for autocomplete
+ */
+export const inferTypeProperties = (type: PHPType): Record<string, string> => {
+  const properties: Record<string, string> = {};
+
+  // First check if it's a custom model and try to parse its properties
+  if (type && type !== 'mixed' && /^[A-Z]/.test(type)) {
+    const modelProperties = parseModelProperties(type);
+    if (Object.keys(modelProperties).length > 0) {
+      return modelProperties;
+    }
+  }
+
+  switch (type) {
+    case 'Collection':
+      return {
+        'count': 'int',
+        'first': 'mixed',
+        'last': 'mixed',
+        'isEmpty': 'bool',
+        'isNotEmpty': 'bool',
+        'map': 'Collection',
+        'filter': 'Collection',
+        'where': 'Collection',
+        'pluck': 'Collection',
+        'toArray': 'array',
+        'toJson': 'string',
+        'each': 'Collection',
+        'chunk': 'Collection',
+        'sort': 'Collection',
+        'sortBy': 'Collection',
+        'reverse': 'Collection',
+        'unique': 'Collection'
+      };
+
+    case 'Carbon':
+      return {
+        'format': 'string',
+        'diffForHumans': 'string',
+        'toDateString': 'string',
+        'toTimeString': 'string',
+        'toDateTimeString': 'string',
+        'timestamp': 'int',
+        'year': 'int',
+        'month': 'int',
+        'day': 'int',
+        'hour': 'int',
+        'minute': 'int',
+        'second': 'int',
+        'addDays': 'Carbon',
+        'subDays': 'Carbon',
+        'addHours': 'Carbon',
+        'subHours': 'Carbon',
+        'isToday': 'bool',
+        'isTomorrow': 'bool',
+        'isYesterday': 'bool',
+        'isPast': 'bool',
+        'isFuture': 'bool'
+      };
+
+    case 'Request':
+      return {
+        'get': 'mixed',
+        'post': 'mixed',
+        'all': 'array',
+        'input': 'mixed',
+        'has': 'bool',
+        'filled': 'bool',
+        'missing': 'bool',
+        'only': 'array',
+        'except': 'array',
+        'query': 'mixed',
+        'file': 'mixed',
+        'hasFile': 'bool',
+        'ip': 'string',
+        'userAgent': 'string',
+        'url': 'string',
+        'fullUrl': 'string',
+        'path': 'string',
+        'method': 'string',
+        'isMethod': 'bool',
+        'ajax': 'bool',
+        'json': 'mixed',
+        'header': 'string'
+      };
+
+    case 'string':
+      return {
+        'length': 'int',
+        'upper': 'string',
+        'lower': 'string',
+        'trim': 'string',
+        'substr': 'string',
+        'replace': 'string',
+        'contains': 'bool',
+        'startsWith': 'bool',
+        'endsWith': 'bool'
+      };
+
+    case 'array':
+      return {
+        'count': 'int',
+        'length': 'int',
+        'keys': 'array',
+        'values': 'array',
+        'merge': 'array',
+        'push': 'int',
+        'pop': 'mixed',
+        'shift': 'mixed',
+        'unshift': 'int',
+        'slice': 'array',
+        'reverse': 'array',
+        'sort': 'bool'
+      };
+
+    default:
+      // For Collection<Model> types
+      if (type && type.startsWith('Collection<') && type.endsWith('>')) {
+        const modelName = type.slice(11, -1); // Extract model name from Collection<Model>
+        return {
+          'count': 'int',
+          'first': modelName,
+          'last': modelName,
+          'isEmpty': 'bool',
+          'isNotEmpty': 'bool',
+          'map': 'Collection',
+          'filter': `Collection<${modelName}>`,
+          'where': `Collection<${modelName}>`,
+          'pluck': 'Collection',
+          'toArray': 'array',
+          'toJson': 'string',
+          'each': `Collection<${modelName}>`,
+          'chunk': 'Collection',
+          'sort': `Collection<${modelName}>`,
+          'sortBy': `Collection<${modelName}>`,
+          'reverse': `Collection<${modelName}>`,
+          'unique': `Collection<${modelName}>`,
+          'take': `Collection<${modelName}>`,
+          'skip': `Collection<${modelName}>`,
+          'slice': `Collection<${modelName}>`,
+          'random': modelName,
+          'shuffle': `Collection<${modelName}>`,
+          'groupBy': 'Collection',
+          'keyBy': 'Collection',
+          'forPage': `Collection<${modelName}>`,
+          'load': `Collection<${modelName}>`,
+          'loadMissing': `Collection<${modelName}>`
+        };
+      }
+      
+      // For custom model classes, provide common Eloquent methods
+      if (type && type !== 'mixed' && /^[A-Z]/.test(type)) {
+        return {
+          'id': 'int',
+          'save': 'bool',
+          'delete': 'bool',
+          'update': 'bool',
+          'fresh': type,
+          'refresh': type,
+          'toArray': 'array',
+          'toJson': 'string',
+          'getAttribute': 'mixed',
+          'setAttribute': 'void',
+          'fill': type,
+          'isDirty': 'bool',
+          'isClean': 'bool',
+          'wasRecentlyCreated': 'bool',
+          'exists': 'bool',
+          'created_at': 'Carbon',
+          'updated_at': 'Carbon',
+          'load': type,
+          'loadMissing': type,
+          'with': type
+        };
+      }
+      return {};
   }
 };
 
