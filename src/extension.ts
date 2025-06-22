@@ -181,9 +181,20 @@ async function refreshVariableInformation(outputChannel: vscode.OutputChannel): 
 }
 
 /**
- * Provide hover information for blade variables
+ * Provide hover information for blade variables and method chains
  */
 function provideHover(document: vscode.TextDocument, position: vscode.Position): vscode.Hover | null {
+	const line = document.lineAt(position.line);
+	const lineText = line.text;
+	const character = position.character;
+	
+	// First, try to detect if we're hovering over a method chain
+	const methodChainHover = provideMethodChainHover(document, position, lineText, character);
+	if (methodChainHover) {
+		return methodChainHover;
+	}
+	
+	// Fallback to original variable hover
 	const wordRange = document.getWordRangeAtPosition(position, /\$[a-zA-Z_][a-zA-Z0-9_]*/);
 	if (!wordRange) { return null; }
 
@@ -191,18 +202,152 @@ function provideHover(document: vscode.TextDocument, position: vscode.Position):
 	const bladeUri = document.uri.toString();
 
 	const varInfo = allBladeVarInfos.find((v) => (v.jumpTargetUri === bladeUri && v.name === varName));
-	if (!varInfo) { return null; }
+	if (!varInfo) { 
+		// Check foreach variables
+		const foreachVars = getForeachVariablesAtPosition(document, position);
+		const foreachVar = foreachVars.find((v) => v.name === varName);
+		if (foreachVar) {
+			const fileName = foreachVar.definedInPath?.match(/[^\/]+$/)?.[0] || "";
+			const modelPath = getModelFilePath(foreachVar.type || 'mixed');
+			
+			const markdownContent = new vscode.MarkdownString([
+				`**Variable:** \`${foreachVar.name}\``,
+				`**Type:** \`${foreachVar.type}\``,
+				`**Source:** [${fileName}](${foreachVar.definedInPath})`,
+				modelPath ? `**Model:** [${foreachVar.type}.php](${modelPath})` : ''
+			].filter(Boolean).join('\n\n'));
+
+			markdownContent.isTrusted = true;
+			return new vscode.Hover(markdownContent, wordRange);
+		}
+		return null; 
+	}
 
 	const fileName = varInfo.definedInPath?.match(/[^\/]+$/)?.[0] || "";
+	const modelPath = getModelFilePath(varInfo.type || 'mixed');
 
 	const markdownContent = new vscode.MarkdownString([
-		`**Vars:** \`${varInfo.name}\``,
+		`**Variable:** \`${varInfo.name}\``,
 		`**Type:** \`${varInfo.type}\``,
 		`**Source:** [${fileName}](${varInfo.definedInPath})`,
-	].join('\n\n'));
+		modelPath ? `**Model:** [${varInfo.type}.php](${modelPath})` : ''
+	].filter(Boolean).join('\n\n'));
 
 	markdownContent.isTrusted = true;
 
+	return new vscode.Hover(markdownContent, wordRange);
+}
+
+/**
+ * Provide hover information for method chains
+ */
+function provideMethodChainHover(document: vscode.TextDocument, position: vscode.Position, lineText: string, character: number): vscode.Hover | null {
+	const bladeUri = document.uri.toString();
+	
+	// Find all method chains in the line
+	const chainRegex = /\$([a-zA-Z_][a-zA-Z0-9_]*)((?:->[a-zA-Z_][a-zA-Z0-9_]*(?:\(\))?)*)/g;
+	let chainMatch;
+	let targetChain = null;
+	
+	// Find the chain that contains the cursor position
+	while ((chainMatch = chainRegex.exec(lineText)) !== null) {
+		const chainStartPos = chainMatch.index;
+		const fullChain = chainMatch[0];
+		const chainEndPos = chainStartPos + fullChain.length;
+		
+		// Check if cursor is within this chain
+		if (character >= chainStartPos && character <= chainEndPos) {
+			targetChain = {
+				match: chainMatch,
+				startPos: chainStartPos,
+				fullChain: fullChain,
+				varName: '$' + chainMatch[1]
+			};
+			break;
+		}
+	}
+	
+	if (!targetChain) { return null; }
+	
+	// Split the chain into segments: [$variable, property1, method(), property2]
+	const segments = targetChain.fullChain.split('->');
+	
+	// Find which segment the cursor is hovering over
+	let currentPos = targetChain.startPos;
+	let hoveredSegment = '';
+	let segmentIndex = -1;
+	let wordRange: vscode.Range | null = null;
+	
+	for (let i = 0; i < segments.length; i++) {
+		const segment = segments[i];
+		const segmentStart = currentPos;
+		const segmentEnd = currentPos + segment.length;
+		
+		if (character >= segmentStart && character <= segmentEnd) {
+			hoveredSegment = segment;
+			segmentIndex = i;
+			wordRange = new vscode.Range(
+				new vscode.Position(position.line, segmentStart),
+				new vscode.Position(position.line, segmentEnd)
+			);
+			break;
+		}
+		
+		currentPos = segmentEnd + 2; // +2 for '->'
+	}
+	
+	if (segmentIndex === -1 || !wordRange) { return null; }
+	
+	// Get the initial variable
+	let varInfo = allBladeVarInfos.find((v) => v.jumpTargetUri === bladeUri && v.name === targetChain.varName);
+	
+	if (!varInfo) {
+		// Check foreach variables
+		const foreachVars = getForeachVariablesAtPosition(document, position);
+		varInfo = foreachVars.find((v) => v.name === targetChain.varName);
+	}
+	
+	if (!varInfo) { return null; }
+	
+	// Build the chain up to the hovered segment
+	let chainUpToHover = '';
+	if (segmentIndex > 0) {
+		const chainSegments = segments.slice(1, segmentIndex + 1); // Skip the variable part
+		chainUpToHover = '->' + chainSegments.join('->');
+	}
+	
+	// Resolve the type at the hovered position
+	let currentType = varInfo.type || 'mixed';
+	let propertyType = currentType;
+	
+	if (segmentIndex > 0) {
+		// Resolve type up to the previous segment
+		const chainToPrevious = segments.slice(1, segmentIndex).join('->');
+		const previousChain = chainToPrevious ? '->' + chainToPrevious : '';
+		currentType = resolvePropertyChainType(varInfo.type || 'mixed', previousChain);
+		
+		// Get the type of the hovered property/method
+		const typeProperties = inferTypeProperties(currentType);
+		const hoveredProperty = hoveredSegment.replace(/\(\)$/, ''); // Remove () for methods
+		if (typeProperties && typeProperties[hoveredProperty]) {
+			propertyType = typeProperties[hoveredProperty];
+		}
+	}
+	
+	const fileName = varInfo.definedInPath?.match(/[^\/]+$/)?.[0] || "";
+	const modelPath = getModelFilePath(extractBaseType(propertyType));
+	
+	const displayChain = segmentIndex === 0 ? targetChain.varName : `${targetChain.varName}${chainUpToHover}`;
+	
+	const markdownContent = new vscode.MarkdownString([
+		`**Chain:** \`${displayChain}\``,
+		`**Current Type:** \`${propertyType}\``,
+		`**Base Variable:** \`${targetChain.varName}\` (from [${fileName}](${varInfo.definedInPath}))`,
+		modelPath ? `**Model:** [${extractBaseType(propertyType)}.php](${modelPath})` : ''
+	].filter(Boolean).join('\n\n'));
+	
+	markdownContent.isTrusted = true;
+	
 	return new vscode.Hover(markdownContent, wordRange);
 }
 
@@ -402,6 +547,74 @@ function resolvePropertyChainType(initialType: string, propertyChain: string): s
 	}
 	
 	return currentType;
+}
+
+/**
+ * Get the file path for a Model class
+ */
+function getModelFilePath(typeName: string): string | null {
+	if (!typeName || typeName === 'mixed' || !/^[A-Z]/.test(typeName)) {
+		return null;
+	}
+	
+	// Extract base type from Collection<Model> or other generic types
+	const baseType = extractBaseType(typeName);
+	if (!baseType || !/^[A-Z]/.test(baseType)) {
+		return null;
+	}
+	
+	const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri?.fsPath;
+	if (!workspaceRoot) {
+		return null;
+	}
+	
+	// Common model paths in Laravel
+	const modelPaths = [
+		`${workspaceRoot}/app/Models/${baseType}.php`,
+		`${workspaceRoot}/app/${baseType}.php`
+	];
+	
+	for (const modelPath of modelPaths) {
+		try {
+			if (require('fs').existsSync(modelPath)) {
+				return `file://${modelPath}`;
+			}
+		} catch {
+			// Ignore file system errors
+		}
+	}
+	
+	return null;
+}
+
+/**
+ * Extract base type from generic types like Collection<Model> or Model|null
+ */
+function extractBaseType(typeName: string): string {
+	if (!typeName) {
+		return 'mixed';
+	}
+	
+	// Handle Collection<Model>
+	if (typeName.startsWith('Collection<') && typeName.endsWith('>')) {
+		return typeName.slice(11, -1);
+	}
+	
+	// Handle nullable types Model|null or ?Model
+	if (typeName.includes('|null')) {
+		return typeName.replace('|null', '');
+	}
+	
+	if (typeName.startsWith('?')) {
+		return typeName.slice(1);
+	}
+	
+	// Handle array types Model[]
+	if (typeName.endsWith('[]')) {
+		return typeName.slice(0, -2);
+	}
+	
+	return typeName;
 }
 
 /**

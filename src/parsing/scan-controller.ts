@@ -345,7 +345,9 @@ const parseRelationMethods = (modelContent: string): Record<string, string> => {
 export const parseModelProperties = (modelName: string): Record<string, string> => {
   try {
     const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri?.fsPath;
-    if (!workspaceRoot) return {};
+    if (!workspaceRoot) {
+      return {};
+    }
 
     // Common model paths in Laravel
     const modelPaths = [
@@ -361,7 +363,9 @@ export const parseModelProperties = (modelName: string): Record<string, string> 
       }
     }
 
-    if (!modelContent) return {};
+    if (!modelContent) {
+      return {};
+    }
 
     const properties: Record<string, string> = {};
 
