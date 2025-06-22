@@ -1,5 +1,5 @@
 import * as vscode from 'vscode';
-import { BladeVarInfo, listControllerFiles, parseViewVariablesFromController, inferTypeProperties } from './parsing/scan-controller';
+import { BladeVarInfo, listControllerFiles, parseViewVariablesFromController, inferTypeProperties, isValidEnumClass, isTraditionalEnumClass } from './parsing/scan-controller';
 
 let phpWasm: any = null;
 let allBladeVarInfos: BladeVarInfo[] = [];
@@ -208,13 +208,14 @@ function provideHover(document: vscode.TextDocument, position: vscode.Position):
 		const foreachVar = foreachVars.find((v) => v.name === varName);
 		if (foreachVar) {
 			const fileName = foreachVar.definedInPath?.match(/[^\/]+$/)?.[0] || "";
-			const modelPath = getModelFilePath(foreachVar.type || 'mixed');
+			const filePath = getModelFilePath(foreachVar.type || 'mixed');
+			const isEnum = isEnumType(foreachVar.type || 'mixed');
 			
 			const markdownContent = new vscode.MarkdownString([
 				`**Variable:** \`${foreachVar.name}\``,
 				`**Type:** \`${foreachVar.type}\``,
 				`**Source:** [${fileName}](${foreachVar.definedInPath})`,
-				modelPath ? `**Model:** [${foreachVar.type}.php](${modelPath})` : ''
+				filePath ? `**${isEnum ? 'Enum' : 'Model'}:** [${foreachVar.type}.php](${filePath})` : ''
 			].filter(Boolean).join('\n\n'));
 
 			markdownContent.isTrusted = true;
@@ -224,13 +225,14 @@ function provideHover(document: vscode.TextDocument, position: vscode.Position):
 	}
 
 	const fileName = varInfo.definedInPath?.match(/[^\/]+$/)?.[0] || "";
-	const modelPath = getModelFilePath(varInfo.type || 'mixed');
+	const filePath = getModelFilePath(varInfo.type || 'mixed');
+	const isEnum = isEnumType(varInfo.type || 'mixed');
 
 	const markdownContent = new vscode.MarkdownString([
 		`**Variable:** \`${varInfo.name}\``,
 		`**Type:** \`${varInfo.type}\``,
 		`**Source:** [${fileName}](${varInfo.definedInPath})`,
-		modelPath ? `**Model:** [${varInfo.type}.php](${modelPath})` : ''
+		filePath ? `**${isEnum ? 'Enum' : 'Model'}:** [${varInfo.type}.php](${filePath})` : ''
 	].filter(Boolean).join('\n\n'));
 
 	markdownContent.isTrusted = true;
@@ -321,21 +323,17 @@ function provideMethodChainHover(document: vscode.TextDocument, position: vscode
 	let propertyType = currentType;
 	
 	if (segmentIndex > 0) {
-		// Resolve type up to the previous segment
-		const chainToPrevious = segments.slice(1, segmentIndex).join('->');
-		const previousChain = chainToPrevious ? '->' + chainToPrevious : '';
-		currentType = resolvePropertyChainType(varInfo.type || 'mixed', previousChain);
+		// Build the complete chain up to and including the hovered segment
+		const chainToHovered = segments.slice(1, segmentIndex + 1).join('->');
+		const fullChain = '->' + chainToHovered;
 		
-		// Get the type of the hovered property/method
-		const typeProperties = inferTypeProperties(currentType);
-		const hoveredProperty = hoveredSegment.replace(/\(\)$/, ''); // Remove () for methods
-		if (typeProperties && typeProperties[hoveredProperty]) {
-			propertyType = typeProperties[hoveredProperty];
-		}
+		// Resolve the complete type including the hovered property/method
+		propertyType = resolvePropertyChainType(varInfo.type || 'mixed', fullChain);
 	}
 	
 	const fileName = varInfo.definedInPath?.match(/[^\/]+$/)?.[0] || "";
-	const modelPath = getModelFilePath(extractBaseType(propertyType));
+	const filePath = getModelFilePath(extractBaseType(propertyType));
+	const isEnum = isEnumType(extractBaseType(propertyType));
 	
 	const displayChain = segmentIndex === 0 ? targetChain.varName : `${targetChain.varName}${chainUpToHover}`;
 	
@@ -343,7 +341,7 @@ function provideMethodChainHover(document: vscode.TextDocument, position: vscode
 		`**Chain:** \`${displayChain}\``,
 		`**Current Type:** \`${propertyType}\``,
 		`**Base Variable:** \`${targetChain.varName}\` (from [${fileName}](${varInfo.definedInPath}))`,
-		modelPath ? `**Model:** [${extractBaseType(propertyType)}.php](${modelPath})` : ''
+		filePath ? `**${isEnum ? 'Enum' : 'Model'}:** [${extractBaseType(propertyType)}.php](${filePath})` : ''
 	].filter(Boolean).join('\n\n'));
 	
 	markdownContent.isTrusted = true;
@@ -550,7 +548,7 @@ function resolvePropertyChainType(initialType: string, propertyChain: string): s
 }
 
 /**
- * Get the file path for a Model class
+ * Get the file path for a PHP class (Model, Enum, etc.)
  */
 function getModelFilePath(typeName: string): string | null {
 	if (!typeName || typeName === 'mixed' || !/^[A-Z]/.test(typeName)) {
@@ -568,16 +566,20 @@ function getModelFilePath(typeName: string): string | null {
 		return null;
 	}
 	
-	// Common model paths in Laravel
-	const modelPaths = [
+	// Common paths for PHP classes in Laravel (Enums first, then Models)
+	const classPaths = [
+		// Enum paths
+		`${workspaceRoot}/app/Enums/${baseType}.php`,
+		`${workspaceRoot}/app/Models/Enums/${baseType}.php`,
+		// Model paths
 		`${workspaceRoot}/app/Models/${baseType}.php`,
 		`${workspaceRoot}/app/${baseType}.php`
 	];
 	
-	for (const modelPath of modelPaths) {
+	for (const classPath of classPaths) {
 		try {
-			if (require('fs').existsSync(modelPath)) {
-				return `file://${modelPath}`;
+			if (require('fs').existsSync(classPath)) {
+				return `file://${classPath}`;
 			}
 		} catch {
 			// Ignore file system errors
@@ -615,6 +617,18 @@ function extractBaseType(typeName: string): string {
 	}
 	
 	return typeName;
+}
+
+/**
+ * Check if a type represents an enum
+ */
+function isEnumType(typeName: string): boolean {
+	if (!typeName || typeName === 'mixed' || !/^[A-Z]/.test(typeName)) {
+		return false;
+	}
+	
+	const baseType = extractBaseType(typeName);
+	return isValidEnumClass(baseType) || isTraditionalEnumClass(baseType);
 }
 
 /**

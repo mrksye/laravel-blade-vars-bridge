@@ -143,6 +143,12 @@ export const parseViewVariablesFromController = async (controllerPath: string): 
  * Infer variable type from PHP code context
  */
 export const inferVariableType = (code: string, varName: string): PHPType => {
+  // Look for enum assignments first (PHP 8.1+ and traditional patterns)
+  const enumType = inferEnumType(code, varName);
+  if (enumType) {
+    return enumType;
+  }
+
   // Look for complex Eloquent query patterns first
   const eloquentQueryPattern = new RegExp(
     `\\$${varName}\\s*=\\s*([A-Z][a-zA-Z0-9_]+)::query\\(\\)[\\s\\S]*?->get\\(\\);?`,
@@ -246,6 +252,277 @@ export const inferVariableType = (code: string, varName: string): PHPType => {
   }
 
   return 'mixed';
+};
+
+/**
+ * Infer enum type from PHP code context
+ */
+export const inferEnumType = (code: string, varName: string): PHPType | null => {
+  // Pattern for PHP 8.1+ enum assignments: $var = EnumName::CaseName
+  const php81EnumPattern = new RegExp(
+    `\\$${varName}\\s*=\\s*([A-Z][a-zA-Z0-9_]+)::([A-Z_][A-Z0-9_]*)`,
+    'g'
+  );
+  
+  const php81Match = code.match(php81EnumPattern);
+  if (php81Match) {
+    const enumName = php81Match[0].match(/([A-Z][a-zA-Z0-9_]+)::/)?.[1];
+    if (enumName && isValidEnumClass(enumName)) {
+      return enumName;
+    }
+  }
+
+  // Pattern for traditional enum assignments: $var = ClassName::CONSTANT
+  const traditionalEnumPattern = new RegExp(
+    `\\$${varName}\\s*=\\s*([A-Z][a-zA-Z0-9_]+)::([A-Z_][A-Z0-9_]*)`,
+    'g'
+  );
+  
+  const traditionalMatch = code.match(traditionalEnumPattern);
+  if (traditionalMatch) {
+    const className = traditionalMatch[0].match(/([A-Z][a-zA-Z0-9_]+)::/)?.[1];
+    if (className && isTraditionalEnumClass(className)) {
+      return className;
+    }
+  }
+
+  // Pattern for enum method calls: $var = EnumName::from('value') or EnumName::tryFrom('value')
+  const enumMethodPattern = new RegExp(
+    `\\$${varName}\\s*=\\s*([A-Z][a-zA-Z0-9_]+)::(from|tryFrom)\\s*\\(`,
+    'g'
+  );
+  
+  const enumMethodMatch = code.match(enumMethodPattern);
+  if (enumMethodMatch) {
+    const enumName = enumMethodMatch[0].match(/([A-Z][a-zA-Z0-9_]+)::/)?.[1];
+    if (enumName && isValidEnumClass(enumName)) {
+      return enumName;
+    }
+  }
+
+  return null;
+};
+
+/**
+ * Check if a class name represents a valid PHP 8.1+ enum
+ */
+export const isValidEnumClass = (className: string): boolean => {
+  try {
+    const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri?.fsPath;
+    if (!workspaceRoot) {
+      return false;
+    }
+
+    // Common enum paths in Laravel
+    const enumPaths = [
+      `${workspaceRoot}/app/Enums/${className}.php`,
+      `${workspaceRoot}/app/Models/Enums/${className}.php`,
+      `${workspaceRoot}/app/${className}.php`
+    ];
+
+    for (const enumPath of enumPaths) {
+      if (fs.existsSync(enumPath)) {
+        const enumContent = fs.readFileSync(enumPath, 'utf-8');
+        // Check if file contains enum declaration
+        if (/enum\s+[A-Z][a-zA-Z0-9_]*/.test(enumContent)) {
+          return true;
+        }
+      }
+    }
+
+    return false;
+  } catch (error) {
+    return false;
+  }
+};
+
+/**
+ * Check if a class name represents a traditional enum (class with constants)
+ */
+export const isTraditionalEnumClass = (className: string): boolean => {
+  try {
+    const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri?.fsPath;
+    if (!workspaceRoot) {
+      return false;
+    }
+
+    // Common class paths in Laravel
+    const classPaths = [
+      `${workspaceRoot}/app/Enums/${className}.php`,
+      `${workspaceRoot}/app/Models/Enums/${className}.php`,
+      `${workspaceRoot}/app/${className}.php`,
+      `${workspaceRoot}/app/Models/${className}.php`
+    ];
+
+    for (const classPath of classPaths) {
+      if (fs.existsSync(classPath)) {
+        const classContent = fs.readFileSync(classPath, 'utf-8');
+        // Check if file contains multiple constants (suggesting enum-like usage)
+        const constantMatches = classContent.match(/const\s+[A-Z_][A-Z0-9_]*\s*=\s*['"][^'"]*['"]/g);
+        if (constantMatches && constantMatches.length >= 2) {
+          return true;
+        }
+      }
+    }
+
+    return false;
+  } catch (error) {
+    return false;
+  }
+};
+
+/**
+ * Parse enum properties from PHP 8.1+ enum or traditional enum class
+ */
+export const parseEnumProperties = (enumName: string): Record<string, string> => {
+  try {
+    const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri?.fsPath;
+    if (!workspaceRoot) {
+      return {};
+    }
+
+    const enumPaths = [
+      `${workspaceRoot}/app/Enums/${enumName}.php`,
+      `${workspaceRoot}/app/Models/Enums/${enumName}.php`,
+      `${workspaceRoot}/app/${enumName}.php`
+    ];
+
+    let enumContent = '';
+    for (const enumPath of enumPaths) {
+      if (fs.existsSync(enumPath)) {
+        enumContent = fs.readFileSync(enumPath, 'utf-8');
+        break;
+      }
+    }
+
+    if (!enumContent) {
+      return {};
+    }
+
+    const properties: Record<string, string> = {};
+
+    // Parse PHP 8.1+ enum cases
+    if (/enum\s+[A-Z][a-zA-Z0-9_]*/.test(enumContent)) {
+      // Extract enum cases: case CASE_NAME = 'value';
+      const caseMatches = enumContent.matchAll(/case\s+([A-Z_][A-Z0-9_]*)\s*(?:=\s*['"]([^'"]*)['"]\s*)?;/g);
+      for (const match of caseMatches) {
+        const [, caseName, caseValue] = match;
+        properties[caseName] = enumName; // The case returns the enum instance
+      }
+
+      // Add standard PHP 8.1+ enum methods
+      properties['name'] = 'string';
+      properties['value'] = 'mixed';
+      properties['cases'] = `array<${enumName}>`;
+      properties['from'] = enumName;
+      properties['tryFrom'] = `${enumName}|null`;
+      
+      // Parse custom methods from enum file
+      const customMethods = parseEnumMethods(enumContent);
+      Object.assign(properties, customMethods);
+    } else {
+      // Parse traditional enum constants
+      const constantMatches = enumContent.matchAll(/const\s+([A-Z_][A-Z0-9_]*)\s*=\s*['"]([^'"]*)['"]/g);
+      for (const match of constantMatches) {
+        const [, constantName, constantValue] = match;
+        properties[constantName] = 'string'; // Traditional constants are usually strings
+      }
+      
+      // Parse custom methods from traditional enum class
+      const customMethods = parseEnumMethods(enumContent);
+      Object.assign(properties, customMethods);
+    }
+
+    return properties;
+  } catch (error) {
+    console.error(`Error parsing enum ${enumName}:`, error);
+    return {};
+  }
+};
+
+/**
+ * Parse methods from enum content and return their return types
+ */
+export const parseEnumMethods = (enumContent: string): Record<string, string> => {
+  const methods: Record<string, string> = {};
+  
+  // Pattern to match public methods with return types
+  // Matches: public function methodName(): string { ... }
+  const methodWithReturnTypePattern = /public\s+function\s+(\w+)\s*\([^)]*\)\s*:\s*(\w+)\s*\{/g;
+  let match;
+  
+  while ((match = methodWithReturnTypePattern.exec(enumContent)) !== null) {
+    const [, methodName, returnType] = match;
+    
+    // Map PHP types to our types
+    let mappedType = returnType;
+    switch (returnType.toLowerCase()) {
+      case 'string':
+        mappedType = 'string';
+        break;
+      case 'int':
+      case 'integer':
+        mappedType = 'int';
+        break;
+      case 'bool':
+      case 'boolean':
+        mappedType = 'bool';
+        break;
+      case 'array':
+        mappedType = 'array';
+        break;
+      case 'self':
+      case 'static':
+        // For enum methods returning self, we need the enum name
+        const enumNameMatch = enumContent.match(/enum\s+([A-Z][a-zA-Z0-9_]*)/);
+        if (enumNameMatch) {
+          mappedType = enumNameMatch[1];
+        } else {
+          mappedType = 'mixed';
+        }
+        break;
+      default:
+        // Keep the original type for custom classes
+        mappedType = returnType;
+    }
+    
+    methods[methodName] = mappedType;
+  }
+  
+  // Pattern to match methods without explicit return types
+  // Try to infer from return statements
+  const methodWithoutReturnTypePattern = /public\s+function\s+(\w+)\s*\([^)]*\)\s*\{([^}]+)\}/g;
+  
+  while ((match = methodWithoutReturnTypePattern.exec(enumContent)) !== null) {
+    const [, methodName, methodBody] = match;
+    
+    // Skip if we already have this method with explicit return type
+    if (methods[methodName]) {
+      continue;
+    }
+    
+    // Try to infer return type from return statements
+    let inferredType = 'mixed';
+    
+    if (/return\s+['"][^'"]*['"]/.test(methodBody)) {
+      inferredType = 'string';
+    } else if (/return\s+\d+/.test(methodBody)) {
+      inferredType = 'int';
+    } else if (/return\s+(true|false)/.test(methodBody)) {
+      inferredType = 'bool';
+    } else if (/return\s+\[/.test(methodBody)) {
+      inferredType = 'array';
+    } else if (/return\s+\$this/.test(methodBody)) {
+      const enumNameMatch = enumContent.match(/enum\s+([A-Z][a-zA-Z0-9_]*)/);
+      if (enumNameMatch) {
+        inferredType = enumNameMatch[1];
+      }
+    }
+    
+    methods[methodName] = inferredType;
+  }
+  
+  return methods;
 };
 
 /**
@@ -416,6 +693,14 @@ export const parseModelProperties = (modelName: string): Record<string, string> 
               properties[fieldName] = 'array';
               break;
             default:
+              // Check if cast type is a custom enum class
+              if (/^[A-Z][a-zA-Z0-9_\\]*$/.test(castType)) {
+                const enumClassName = castType.split('\\').pop() || castType;
+                if (isValidEnumClass(enumClassName) || isTraditionalEnumClass(enumClassName)) {
+                  properties[fieldName] = enumClassName;
+                  break;
+                }
+              }
               properties[fieldName] = 'string';
           }
         }
@@ -499,8 +784,17 @@ export const parseModelProperties = (modelName: string): Record<string, string> 
 export const inferTypeProperties = (type: PHPType): Record<string, string> => {
   const properties: Record<string, string> = {};
 
-  // First check if it's a custom model and try to parse its properties
+  // First check if it's a class type
   if (type && type !== 'mixed' && /^[A-Z]/.test(type)) {
+    // Check if it's actually an enum first
+    if (isValidEnumClass(type) || isTraditionalEnumClass(type)) {
+      const enumProperties = parseEnumProperties(type);
+      if (Object.keys(enumProperties).length > 0) {
+        return enumProperties;
+      }
+    }
+    
+    // If not an enum, try parsing as a custom model
     const modelProperties = parseModelProperties(type);
     if (Object.keys(modelProperties).length > 0) {
       return modelProperties;

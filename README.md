@@ -8,7 +8,7 @@ Laravel Blade Vars Bridge is a VSCode extension that provides intelligent variab
 - Auto-completion for variables passed from Controllers in Blade templates
 - Type-based property and method completion with `$variable->` syntax
 - Support for complex method chains like `$user->posts->first()->title`
-- Smart completion for Collection, Model, Carbon, Request, and basic PHP types
+- Smart completion for Collection, Model, Carbon, Request, Enum, and basic PHP types
 
 ### 🔍 Advanced Hover Information
 - **Variable Hover**: Display variable type, source controller, and model file links
@@ -17,8 +17,9 @@ Laravel Blade Vars Bridge is a VSCode extension that provides intelligent variab
 - **Multiple Chain Support**: Handle multiple method chains in the same line independently
 
 ### ⚡ Smart Type Detection
-- Automatic type inference from PHP code context (Models, Collections, Carbon dates, etc.)
+- Automatic type inference from PHP code context (Models, Collections, Carbon dates, Enums, etc.)
 - Parse Model properties from `$fillable`, `$casts`, `$dates`, and PHPDoc annotations
+- **NEW: PHP Enum Support** - Detect PHP 8.1+ enums and traditional enum classes with accurate method completion
 - Detect Eloquent relationships (hasOne, hasMany, belongsTo, etc.)
 - Support for `@foreach` loop variables with proper type resolution
 
@@ -50,7 +51,8 @@ class UserController extends Controller
             'user' => $user,
             'posts' => $posts,
             'lastLogin' => Carbon::now(),
-            'settings' => collect(['theme' => 'dark'])
+            'settings' => collect(['theme' => 'dark']),
+            'status' => UserStatus::ACTIVE
         ]);
     }
 }
@@ -60,7 +62,7 @@ class UserController extends Controller
 
 **Variable Completion:**
 ```blade
-{{ $ }}  {{-- Shows: $user, $posts, $lastLogin, $settings --}}
+{{ $ }}  {{-- Shows: $user, $posts, $lastLogin, $settings, $status --}}
 ```
 
 **Method Chain Completion:**
@@ -68,12 +70,14 @@ class UserController extends Controller
 {{ $user-> }}  {{-- Shows: name, email, posts, created_at, save(), delete(), etc. --}}
 {{ $posts->first()-> }}  {{-- Shows Post model properties and methods --}}
 {{ $lastLogin-> }}  {{-- Shows Carbon methods: format, diffForHumans, etc. --}}
+{{ $status-> }}  {{-- Shows Enum methods: name, value, label(), etc. --}}
 ```
 
 **Advanced Hover Information:**
 - Hover over `$user` → Shows: Type: `User`, Source: `UserController.php`, Model: `User.php`
+- Hover over `$status` → Shows: Type: `UserStatus`, Source: `UserController.php`, Enum: `UserStatus.php`
 - Hover over `first()` in `$posts->first()` → Shows: Chain: `$posts->first()`, Type: `Post`
-- Hover over `title` in `$posts->first()->title` → Shows: Chain: `$posts->first()->title`, Type: `string`
+- Hover over `label()` in `$status->label()` → Shows: Chain: `$status->label()`, Type: `string`
 
 **Foreach Support:**
 ```blade
@@ -108,6 +112,7 @@ return view('someview', compact('user', 'posts', 'data'));
 - **Collections**: `User::all()`, `$user->posts()->get()`, `collect()`
 - **Carbon Dates**: `Carbon::now()`, `now()`, `today()`
 - **Request Objects**: `$request`, `request()`
+- **PHP Enums**: `Status::ACTIVE`, `UserRole::ADMIN`, `Priority::from('high')`
 - **Basic Types**: Arrays `[]`, Strings `""`, Numbers, Booleans
 
 ### ❌ Currently Not Supported
@@ -143,6 +148,14 @@ If you need to check the extension's operation logs:
 The extension runs quietly in the background and only shows error notifications when needed.
 
 ## Release Notes
+
+### 0.0.10
+- ✨ **NEW**: PHP Enum support for both PHP 8.1+ enums and traditional enum classes
+- ✨ **NEW**: Automatic enum type detection and inference from controller assignments
+- ✨ **NEW**: Custom enum method parsing with accurate return type resolution
+- ✨ **NEW**: Laravel `$casts` array enum type detection
+- 🔧 **IMPROVED**: Enhanced hover information for enums vs models
+- 🔧 **FIXED**: Model property completion bug when enum detection was added
 
 ### 0.0.9
 - 🔧 **IMPROVED**: Removed auto-display of output channel on startup for cleaner experience
