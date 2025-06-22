@@ -12,7 +12,7 @@ let phpWasmReady = false;
  */
 export async function activate(context: vscode.ExtensionContext) {
 	console.log('Laravel Blade Vars Bridge extension activating...');
-	const outputChannel = vscode.window.createOutputChannel('Laravel Blade Vars Bridge Debug Channel');
+	const outputChannel = vscode.window.createOutputChannel('Laravel Blade Vars Bridge');
 	outputChannel.appendLine('Laravel Blade Vars Bridge extension has been activated!');
 
 	try {

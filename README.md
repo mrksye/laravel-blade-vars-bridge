@@ -133,7 +133,21 @@ This extension contributes the following settings:
 - Some dynamic Eloquent relationship properties may not be inferred
 - Requires standard Laravel project structure
 
+## Debugging
+
+If you need to check the extension's operation logs:
+1. Open **View** → **Output**
+2. Select **Laravel Blade Vars Bridge** from the dropdown
+3. View detailed logs of variable scanning and type inference
+
+The extension runs quietly in the background and only shows error notifications when needed.
+
 ## Release Notes
+
+### 0.0.9
+- 🔧 **IMPROVED**: Removed auto-display of output channel on startup for cleaner experience
+- 🔧 **IMPROVED**: Background logging without interrupting workflow
+- 🔧 **IMPROVED**: Error notifications via popup instead of output channel display
 
 ### 0.0.8
 - ✨ **NEW**: Advanced hover information with type details and clickable links
