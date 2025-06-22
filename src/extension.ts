@@ -238,6 +238,21 @@ function provideHover(document: vscode.TextDocument, position: vscode.Position):
 			markdownContent.isTrusted = true;
 			return new vscode.Hover(markdownContent, wordRange);
 		}
+		
+		// Variable not found - try to find related controller from other variables
+		const relatedVar = allBladeVarInfos.find((v) => v.jumpTargetUri === bladeUri);
+		if (relatedVar) {
+			const fileName = relatedVar.definedInPath?.match(/[^\/]+$/)?.[0] || "Controller";
+			const markdownContent = new vscode.MarkdownString([
+				`**Variable:** \`${varName}\``,
+				`**Status:** ⚠️ 型情報なし`,
+				`**Controller:** [${fileName}](${relatedVar.definedInPath})`
+			].join('\n\n'));
+
+			markdownContent.isTrusted = true;
+			return new vscode.Hover(markdownContent, wordRange);
+		}
+		
 		return null; 
 	}
 
