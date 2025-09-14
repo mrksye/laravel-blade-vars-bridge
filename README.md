@@ -1,5 +1,9 @@
 # Laravel Blade Vars Bridge
 
+[![VS Code Marketplace](https://img.shields.io/visual-studio-marketplace/v/mrksye.laravel-blade-vars-bridge?color=blue&label=VS%20Code%20Marketplace)](https://marketplace.visualstudio.com/items?itemName=mrksye.laravel-blade-vars-bridge)
+[![GitHub](https://img.shields.io/badge/GitHub-Repository-181717?logo=github)](https://github.com/mrksye/laravel-blade-vars-bridge)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+
 Laravel Blade Vars Bridge is a VSCode extension that provides intelligent variable completion and advanced type information for Laravel Blade templates based on variables passed from Controllers.
 
 ## Features
@@ -148,6 +152,10 @@ If you need to check the extension's operation logs:
 The extension runs quietly in the background and only shows error notifications when needed.
 
 ## Release Notes
+
+### 0.0.11
+- 📝 **UPDATED**: Added GitHub repository badges and marketplace links to README
+- 🔧 **IMPROVED**: Better project visibility and trust indicators
 
 ### 0.0.10
 - ✨ **NEW**: PHP Enum support for both PHP 8.1+ enums and traditional enum classes
