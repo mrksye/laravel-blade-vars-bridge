@@ -1,5 +1,21 @@
 import * as vscode from 'vscode';
 import * as fs from 'fs';
+import { 
+  VIEW_CALL_PATTERNS, 
+  VARIABLE_PATTERNS, 
+  TYPE_INFERENCE_PATTERNS, 
+  ENUM_PATTERNS, 
+  CLASS_PATTERNS,
+  RELATION_PATTERNS,
+  BLADE_PATTERNS,
+  createVariablePattern,
+  createForeachPattern
+} from './php-patterns';
+import { 
+  createASTParsingScript, 
+  createTokenParsingScript, 
+  createPHPWrapper 
+} from './php-wasm-templates';
 
 /**
  * Scan all controllers using VSCode API.
@@ -44,7 +60,7 @@ export const parseViewVariablesFromController = async (controllerPath: string, p
     // Fallback to regex parsing
 
     // Pattern to match view() calls with arrays: view('name', [...])
-    const viewPattern = /view\s*\(\s*['"]([^'"]+)['"]\s*,\s*\[([^\]]+)\]\s*\)/g;
+    const viewPattern = VIEW_CALL_PATTERNS.arraySyntax;
     let viewMatch;
 
     while ((viewMatch = viewPattern.exec(rawCode)) !== null) {
@@ -53,7 +69,7 @@ export const parseViewVariablesFromController = async (controllerPath: string, p
 
       // Extract variable assignments from the array
       // Matches patterns like: 'key' => $value, "key" => $value
-      const varPattern = /['"]([^'"]+)['"]\s*=>\s*\$([a-zA-Z_][a-zA-Z0-9_]*)/g;
+      const varPattern = VARIABLE_PATTERNS.arrayKeyValue;
       let varMatch;
 
       while ((varMatch = varPattern.exec(varsString)) !== null) {
@@ -96,7 +112,7 @@ export const parseViewVariablesFromController = async (controllerPath: string, p
     }
 
     // Also look for compact() usage: view('name', compact('var1', 'var2'))
-    const compactPattern = /view\s*\(\s*['"]([^'"]+)['"]\s*,\s*compact\s*\(\s*([^)]+)\s*\)\s*\)/g;
+    const compactPattern = VIEW_CALL_PATTERNS.compactSyntax;
     let compactMatch;
 
     while ((compactMatch = compactPattern.exec(rawCode)) !== null) {
@@ -272,9 +288,9 @@ const inferVariableType = (code: string, varName: string): PHPType => {
  * Infer enum type from PHP code context
  */
 const inferEnumType = (code: string, varName: string): PHPType | null => {
-  // Pattern for PHP 8.1+ enum assignments: $var = EnumName::CaseName
+  // Check PHP 8.1+ enum assignments using imported patterns
   const php81EnumPattern = new RegExp(
-    `\\$${varName}\\s*=\\s*([A-Z][a-zA-Z0-9_]+)::([A-Z_][A-Z0-9_]*)`,
+    ENUM_PATTERNS.php81Enum.source.replace(/\\(\\w\\+\\)/, varName),
     'g'
   );
   
@@ -286,9 +302,9 @@ const inferEnumType = (code: string, varName: string): PHPType | null => {
     }
   }
 
-  // Pattern for traditional enum assignments: $var = ClassName::CONSTANT
+  // Check traditional enum assignments using imported patterns
   const traditionalEnumPattern = new RegExp(
-    `\\$${varName}\\s*=\\s*([A-Z][a-zA-Z0-9_]+)::([A-Z_][A-Z0-9_]*)`,
+    ENUM_PATTERNS.traditionalEnum.source.replace(/\\(\\w\\+\\)/, varName),
     'g'
   );
   
@@ -300,9 +316,9 @@ const inferEnumType = (code: string, varName: string): PHPType | null => {
     }
   }
 
-  // Pattern for enum method calls: $var = EnumName::from('value') or EnumName::tryFrom('value')
+  // Check enum method calls using imported patterns
   const enumMethodPattern = new RegExp(
-    `\\$${varName}\\s*=\\s*([A-Z][a-zA-Z0-9_]+)::(from|tryFrom)\\s*\\(`,
+    ENUM_PATTERNS.enumMethod.source.replace(/\\(\\w\\+\\)/, varName),
     'g'
   );
   
@@ -338,7 +354,7 @@ export const isValidEnumClass = (className: string): boolean => {
       if (fs.existsSync(enumPath)) {
         const enumContent = fs.readFileSync(enumPath, 'utf-8');
         // Check if file contains enum declaration
-        if (/enum\s+[A-Z][a-zA-Z0-9_]*/.test(enumContent)) {
+        if (CLASS_PATTERNS.enumDeclaration.test(enumContent)) {
           return true;
         }
       }
@@ -372,7 +388,7 @@ export const isTraditionalEnumClass = (className: string): boolean => {
       if (fs.existsSync(classPath)) {
         const classContent = fs.readFileSync(classPath, 'utf-8');
         // Check if file contains multiple constants (suggesting enum-like usage)
-        const constantMatches = classContent.match(/const\s+[A-Z_][A-Z0-9_]*\s*=\s*['"][^'"]*['"]/g);
+        const constantMatches = classContent.match(CLASS_PATTERNS.constant);
         if (constantMatches && constantMatches.length >= 2) {
           return true;
         }
@@ -416,9 +432,9 @@ export const parseEnumProperties = (enumName: string): Record<string, string> =>
     const properties: Record<string, string> = {};
 
     // Parse PHP 8.1+ enum cases
-    if (/enum\s+[A-Z][a-zA-Z0-9_]*/.test(enumContent)) {
+    if (CLASS_PATTERNS.enumDeclaration.test(enumContent)) {
       // Extract enum cases: case CASE_NAME = 'value';
-      const caseMatches = enumContent.matchAll(/case\s+([A-Z_][A-Z0-9_]*)\s*(?:=\s*['"]([^'"]*)['"]\s*)?;/g);
+      const caseMatches = enumContent.matchAll(CLASS_PATTERNS.enumCase);
       for (const match of caseMatches) {
         const [, caseName, caseValue] = match;
         properties[caseName] = enumName; // The case returns the enum instance
@@ -436,7 +452,7 @@ export const parseEnumProperties = (enumName: string): Record<string, string> =>
       Object.assign(properties, customMethods);
     } else {
       // Parse traditional enum constants
-      const constantMatches = enumContent.matchAll(/const\s+([A-Z_][A-Z0-9_]*)\s*=\s*['"]([^'"]*)['"]/g);
+      const constantMatches = enumContent.matchAll(CLASS_PATTERNS.constant);
       for (const match of constantMatches) {
         const [, constantName, constantValue] = match;
         properties[constantName] = 'string'; // Traditional constants are usually strings
@@ -460,12 +476,10 @@ export const parseEnumProperties = (enumName: string): Record<string, string> =>
 export const parseEnumMethods = (enumContent: string): Record<string, string> => {
   const methods: Record<string, string> = {};
   
-  // Pattern to match public methods with return types
-  // Matches: public function methodName(): string { ... }
-  const methodWithReturnTypePattern = /public\s+function\s+(\w+)\s*\([^)]*\)\s*:\s*(\w+)\s*\{/g;
+  // Pattern to match public methods with return types using imported pattern
   let match;
   
-  while ((match = methodWithReturnTypePattern.exec(enumContent)) !== null) {
+  while ((match = CLASS_PATTERNS.methodWithReturnType.exec(enumContent)) !== null) {
     const [, methodName, returnType] = match;
     
     // Map PHP types to our types
@@ -503,11 +517,9 @@ export const parseEnumMethods = (enumContent: string): Record<string, string> =>
     methods[methodName] = mappedType;
   }
   
-  // Pattern to match methods without explicit return types
+  // Pattern to match methods without explicit return types using imported pattern
   // Try to infer from return statements
-  const methodWithoutReturnTypePattern = /public\s+function\s+(\w+)\s*\([^)]*\)\s*\{([^}]+)\}/g;
-  
-  while ((match = methodWithoutReturnTypePattern.exec(enumContent)) !== null) {
+  while ((match = CLASS_PATTERNS.methodWithoutReturnType.exec(enumContent)) !== null) {
     const [, methodName, methodBody] = match;
     
     // Skip if we already have this method with explicit return type
@@ -556,10 +568,7 @@ export const extractForeachVariables = (bladeFilePath: string, collectionVar: st
     const foreachVars: string[] = [];
     
     // Pattern to match @foreach ($collection as $item) or @forelse ($collection as $item)
-    const foreachPattern = new RegExp(
-      `@fore(?:ach|lse)\\s*\\(\\s*\\${collectionVar.slice(1)}\\s+as\\s+\\$(\\w+)\\s*\\)`,
-      'g'
-    );
+    const foreachPattern = createForeachPattern(collectionVar);
     
     let match;
     while ((match = foreachPattern.exec(bladeContent)) !== null) {
@@ -582,27 +591,17 @@ export const extractForeachVariables = (bladeFilePath: string, collectionVar: st
 const parseRelationMethods = (modelContent: string): Record<string, string> => {
   const relations: Record<string, string> = {};
   
-  // Pattern to match relation methods
-  const relationPatterns = [
-    // hasOne, belongsTo (single model)
-    /public\s+function\s+(\w+)\s*\([^)]*\)\s*(?::\s*\w+)?\s*\{[^}]*return\s+\$this->(hasOne|belongsTo)\s*\(/g,
-    // hasMany, belongsToMany (collection)
-    /public\s+function\s+(\w+)\s*\([^)]*\)\s*(?::\s*\w+)?\s*\{[^}]*return\s+\$this->(hasMany|belongsToMany)\s*\(/g,
-    // morphTo, morphOne, morphMany
-    /public\s+function\s+(\w+)\s*\([^)]*\)\s*(?::\s*\w+)?\s*\{[^}]*return\s+\$this->(morphTo|morphOne|morphMany)\s*\(/g
-  ];
+  // Use imported relation patterns
+  const relationPatterns = RELATION_PATTERNS;
 
   for (const pattern of relationPatterns) {
     let match;
-    while ((match = pattern.exec(modelContent)) !== null) {
+    while ((match = pattern.pattern.exec(modelContent)) !== null) {
       const [, methodName, relationType] = match;
       
-      // Map relation types to return types
-      switch (relationType) {
-        case 'hasOne':
-        case 'belongsTo':
-        case 'morphTo':
-        case 'morphOne':
+      // Map relation types to return types based on pattern returnType
+      switch (pattern.returnType) {
+        case 'single':
           // Try to extract the related model from the relation call
           const singleModelMatch = match[0].match(/\$this->\w+\s*\(\s*([A-Z]\w+)::class/);
           if (singleModelMatch) {
@@ -612,15 +611,23 @@ const parseRelationMethods = (modelContent: string): Record<string, string> => {
           }
           break;
           
-        case 'hasMany':
-        case 'belongsToMany':
-        case 'morphMany':
+        case 'collection':
           // Try to extract the related model for collections
           const collectionModelMatch = match[0].match(/\$this->\w+\s*\(\s*([A-Z]\w+)::class/);
           if (collectionModelMatch) {
             relations[methodName] = `Collection<${collectionModelMatch[1]}>`;
           } else {
             relations[methodName] = 'Collection'; // Fallback to generic collection
+          }
+          break;
+          
+        case 'morph':
+          // Handle morph relations similar to single but with different logic if needed
+          const morphModelMatch = match[0].match(/\$this->\w+\s*\(\s*([A-Z]\w+)::class/);
+          if (morphModelMatch) {
+            relations[methodName] = morphModelMatch[1];
+          } else {
+            relations[methodName] = 'Model'; // Fallback to generic model
           }
           break;
       }
@@ -660,8 +667,8 @@ export const parseModelProperties = (modelName: string): Record<string, string> 
 
     const properties: Record<string, string> = {};
 
-    // Parse $fillable array
-    const fillableMatch = modelContent.match(/protected\s+\$fillable\s*=\s*\[([\s\S]*?)\]/);
+    // Parse $fillable array using imported pattern
+    const fillableMatch = modelContent.match(CLASS_PATTERNS.fillableArray);
     if (fillableMatch) {
       const fillableContent = fillableMatch[1];
       const fillableItems = fillableContent.match(/'([^']+)'/g) || [];
@@ -671,8 +678,8 @@ export const parseModelProperties = (modelName: string): Record<string, string> 
       });
     }
 
-    // Parse $casts array for more specific types
-    const castsMatch = modelContent.match(/protected\s+\$casts\s*=\s*\[([\s\S]*?)\]/);
+    // Parse $casts array for more specific types using imported pattern
+    const castsMatch = modelContent.match(CLASS_PATTERNS.castsArray);
     if (castsMatch) {
       const castsContent = castsMatch[1];
       const castLines = castsContent.split(',');
@@ -721,8 +728,8 @@ export const parseModelProperties = (modelName: string): Record<string, string> 
       }
     }
 
-    // Parse $dates array
-    const datesMatch = modelContent.match(/protected\s+\$dates\s*=\s*\[([\s\S]*?)\]/);
+    // Parse $dates array using imported pattern
+    const datesMatch = modelContent.match(CLASS_PATTERNS.datesArray);
     if (datesMatch) {
       const datesContent = datesMatch[1];
       const dateItems = datesContent.match(/'([^']+)'/g) || [];
@@ -732,8 +739,8 @@ export const parseModelProperties = (modelName: string): Record<string, string> 
       });
     }
 
-    // Parse PHPDoc @property annotations
-    const phpDocMatches = modelContent.matchAll(/\*\s*@property\s+(\w+(?:\[\])?)\s+\$(\w+)/g);
+    // Parse PHPDoc @property annotations using imported pattern
+    const phpDocMatches = modelContent.matchAll(CLASS_PATTERNS.phpDocProperty);
     for (const match of phpDocMatches) {
       const [, phpDocType, fieldName] = match;
       
@@ -1048,21 +1055,10 @@ export const parseWithPhpWasm = (phpCode: string, controllerPath: string, phpWas
     const bladeVarInfo: BladeVarInfo[] = [];
     
     // Create a valid PHP file wrapper
-    const wrappedCode = `<?php
-${phpCode}
-`;
+    const wrappedCode = createPHPWrapper(phpCode);
 
-    // Parse PHP code to AST
-    const astScript = `
-<?php
-$code = ${JSON.stringify(wrappedCode)};
-try {
-    $ast = ast\\parse_code($code, $version=70);
-    echo json_encode($ast, JSON_PRETTY_PRINT);
-} catch (Exception $e) {
-    echo json_encode(['error' => $e->getMessage()]);
-}
-`;
+    // Parse PHP code to AST using template
+    const astScript = createASTParsingScript(wrappedCode);
 
     const result = phpWasm.run(astScript);
     
@@ -1075,46 +1071,7 @@ try {
       astData = JSON.parse(result.text);
     } catch (jsonError) {
       // Try alternative AST parsing method using token_get_all
-      const tokenScript = `
-<?php
-$code = ${JSON.stringify(wrappedCode)};
-$tokens = token_get_all($code);
-$methods = [];
-$in_function = false;
-$function_name = '';
-$brace_count = 0;
-$looking_for_view = false;
-
-foreach ($tokens as $i => $token) {
-    if (is_array($token)) {
-        $token_name = token_name($token[0]);
-        $token_value = $token[1];
-        
-        // Look for function definitions
-        if ($token_name === 'T_FUNCTION') {
-            $in_function = true;
-        }
-        
-        // Get function name
-        if ($in_function && $token_name === 'T_STRING') {
-            $function_name = $token_value;
-            $in_function = false;
-        }
-        
-        // Look for view() calls
-        if ($token_name === 'T_STRING' && $token_value === 'view') {
-            $looking_for_view = true;
-            $methods[] = [
-                'type' => 'view_call',
-                'function' => $function_name,
-                'position' => $i
-            ];
-        }
-    }
-}
-
-echo json_encode($methods, JSON_PRETTY_PRINT);
-`;
+      const tokenScript = createTokenParsingScript(wrappedCode);
 
       const tokenResult = phpWasm.run(tokenScript);
       if (!tokenResult || !tokenResult.text) {
@@ -1159,7 +1116,7 @@ const parseViewCallsUsingEnhancedRegex = (phpCode: string, controllerPath: strin
 
   // More sophisticated view() pattern matching
   // Handles multi-line view calls and complex array structures
-  const viewCallPattern = /view\s*\(\s*['"]([^'"]+)['"]\s*,\s*(\[[\s\S]*?\]|\w+\([^)]*\)|compact\([^)]*\))\s*\)/g;
+  const viewCallPattern = VIEW_CALL_PATTERNS.enhancedCall;
   
   let match;
   while ((match = viewCallPattern.exec(phpCode)) !== null) {
@@ -1198,7 +1155,7 @@ const parseArraySyntaxVariables = (
   const cleanArray = arrayString.slice(1, -1); // Remove [ ]
   
   // More sophisticated parsing to handle nested arrays and complex expressions
-  const variablePattern = /['"]([^'"]+)['"]\s*=>\s*(\$[a-zA-Z_][a-zA-Z0-9_]*(?:->[a-zA-Z_][a-zA-Z0-9_]*)*|\$[a-zA-Z_][a-zA-Z0-9_]*\([^)]*\)|[^,]+)/g;
+  const variablePattern = VARIABLE_PATTERNS.enhancedArrayVariable;
   
   let varMatch;
   while ((varMatch = variablePattern.exec(cleanArray)) !== null) {
